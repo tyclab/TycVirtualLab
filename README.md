@@ -1,0 +1,169 @@
+# TycVirtualLab
+
+TycVirtualLab runs reproducible firmware experiments, captures LED buffers and
+internal state, compares independent implementations, and displays captures in an
+offline viewer. Its command is `tycvl`.
+
+The shareable project contains the test machinery, original synthetic examples,
+and adapter contracts. Firmware, recovered vendor algorithms, memory maps,
+recordings, private profiles, and experiment results stay outside this repository.
+The MIT license covers this project's original setup code, not those inputs.
+
+## Quick start
+
+Linux (including WSL2) and Python 3.11 or newer are required; the core has no
+third-party Python dependencies. Process groups and resource locks use Unix APIs;
+native Windows execution is not supported. From this checkout:
+
+```sh
+python3 -m vfl profiles
+python3 -m vfl generate --kind music-noise --frames 300 --out ../TycVirtualLab-private/input.json
+python3 -m vfl run hypercube-demo ../TycVirtualLab-private/input.json --out ../TycVirtualLab-private/run-a
+python3 -m vfl run hypercube-demo ../TycVirtualLab-private/input.json --out ../TycVirtualLab-private/run-b
+python3 -m vfl compare ../TycVirtualLab-private/run-a/capture.json ../TycVirtualLab-private/run-b/capture.json --events
+python3 -m vfl view ../TycVirtualLab-private/run-a/capture.json --out ../TycVirtualLab-private/viewer.html
+```
+
+Open the resulting HTML locally. It embeds its data and assets, makes no network
+requests, and needs no account or server. The capture may also be loaded with its
+file picker. An exported viewer contains the capture, so it remains private.
+
+The `hypercube-demo`, `exoy-one-demo`, and `glorb-demo` profiles run an authored
+synthetic state machine. They demonstrate different geometry and masking needs;
+they are **not vendor firmware emulators**. Device details and the boundaries of
+these demonstrations are in [docs/devices.md](docs/devices.md).
+
+On Nix:
+
+```sh
+nix develop --command python -m unittest discover -s tests -v
+mkdir -p ../TycVirtualLab-private
+nix build --out-link ../TycVirtualLab-private/nix-result
+nix run . -- profiles
+nix develop .#emulation --command ghidra-analyzeHeadless
+```
+
+Keep the Nix output link outside this checkout: source auditing rejects symlinks.
+The flake pins its toolchain. The optional emulation shell supplies Ghidra; the
+framework itself does not need it. No system package installation is required.
+Installing this Python package into a virtual environment also provides `tycvl`.
+
+## Inputs and execution
+
+An experiment has a versioned profile, an input trace, an execution adapter, and a
+fresh private output directory. All frame timestamps use microseconds. Input kind,
+units, range, channel count, random seed and clock policy are explicit.
+
+- **Bands:** integer ADC values. The firmware's own filtering and gain processing
+  can execute after this boundary.
+- **PCM:** normalized mono sample blocks with an explicit sample rate and block
+  size. A device adapter must identify the correct firmware sample-input boundary.
+- **WAV to bands:** a separate approximate seven-filter/peak-envelope model. It
+  includes read-dependent decay and declares its parameters and omissions. It is
+  not a calibrated physical microphone model or a plain FFT replacement.
+
+```sh
+python3 -m vfl tone --frequency 160 --frequency 1000 --seconds 2 --out ../TycVirtualLab-private/tones.json
+python3 -m vfl wav input.wav --mode bands --out ../TycVirtualLab-private/bands.json
+python3 -m vfl wav input.wav --mode pcm --out ../TycVirtualLab-private/pcm.json
+python3 -m vfl doctor /path/to/private/device-profile.json
+python3 -m vfl run /path/to/private/device-profile.json /path/to/private/input.json --out /path/to/private/new-run
+```
+
+For WAV input, integer PCM 8/16/24/32-bit is supported. Choose a channel explicitly
+or use the documented mean downmix. The seven-band model requires a sample rate
+above 32 kHz. Existing captures can inform a private calibration configuration;
+they are never bundled into the source distribution.
+
+The public external-process interface can host Ghidra, QEMU, a recovered native
+renderer, or another execution engine without pretending those engines already
+model a particular device. The included `tycvl-ghidra` adapter executes configured
+Xtensa call0 routines, with target addresses and images supplied externally;
+see [docs/ghidra.md](docs/ghidra.md). Other engines require their own adapters.
+A private configuration or adapter owns loading, memory maps, ROM,
+initialization, entry points, peripheral hooks and output conversion. The included
+strict `vfl.hsemu` parser supports an existing D/R/E/X dump protocol without
+embedding firmware addresses. See [docs/adapters.md](docs/adapters.md).
+
+## What a comparison proves
+
+Capture manifests distinguish `original-firmware`, `recovered-code`, `synthetic`,
+and `replay`. Execution kind is an explicit adapter declaration checked against
+its profile, not certification that arbitrary external code tells the truth.
+
+Before comparing, TycVirtualLab checks experiment identity: inputs, profile ID,
+settings, geometry and bus layout. It compares every RGB byte and, by default,
+the captured state; `--events` additionally compares recorded reads. `--rgb-only`
+explicitly narrows the comparison when state is unavailable. The report identifies
+the first differing frame, pixel, channel, state byte or event.
+
+By default, `compare` requires completed run evidence and verifies the capture
+hash recorded by the runner. Either a run directory or its `capture.json` may be
+supplied. `verify-run` performs that integrity check separately. Standalone
+captures and raw imports require `compare --unverified`; that result is labeled
+unverified and cannot establish that a run completed successfully.
+
+A match is conditional on the supplied inputs and initialization. It does not
+establish a real microphone response, electrical integrity, wall-clock scheduling,
+or accurate physical LED pulses. Substituted RNG/time sources and omitted hardware
+must be listed in a capture's limitations. A backend without real read logging
+must report that capability as false.
+
+## Local execution and privacy
+
+Profiles contain executable argument lists and are trusted local code. Review a
+profile before running it. TycVirtualLab does not sandbox an emulator or a hostile
+firmware image; use an OS/container boundary when needed. Commands run without a
+shell, with a bounded timeout, process-group cleanup, log limits, optional shared
+resource locks, and an optional HOLD file. HOLD is checked before execution and
+while waiting for a lock; it is not a live cancellation switch.
+
+TERM and HUP trigger process-group cleanup, and child processes inherit the
+resource lock. The external runner API must be called from the main Python
+thread so it can install temporary signal handlers. SIGKILL cannot trigger
+cleanup; a surviving backend retains its inherited lock until it exits.
+Descendants that start their own sessions escape process-group cleanup. Use an
+external supervisor or cgroup when forced termination must stop every process.
+Backend configuration keys and types are validated; unknown options are rejected.
+
+Each external request carries a fresh nonce and input/configuration hashes. The
+adapter must echo them, preventing a stale capture from silently becoming a fresh
+result. Declared assets are hashed before and after execution. A failed run keeps
+its diagnostic files and failed status, but does not produce a final accepted
+capture. Choose a new directory for each run.
+
+The CLI refuses experiment writes inside the source checkout. Source sharing uses
+an allowlist and rejects private artifact names, firmware blobs, result schemas,
+symlinks and recognizable private paths/keys. This is a release check, not a
+universal secret detector; review the archive before publication.
+
+```sh
+python3 -m vfl audit-source
+python3 -m vfl export-source --out ../TycVirtualLab-private/TycVirtualLab-source.tar.gz
+python3 -m vfl verify-source /path/to/extracted/TycVirtualLab
+```
+
+The archive contains source and exactly one source checksum manifest. Auditing
+an extracted archive also checks its manifest; `verify-source` requires the
+manifest and verifies the exact file inventory and every payload hash. Re-export
+of an unchanged extracted tree produces the same archive bytes. These checks
+establish source integrity, not publisher authenticity, and do not inspect Git
+history. Nothing is uploaded or published by these commands.
+
+## Development
+
+```sh
+python3 -m unittest discover -s tests -v
+python3 -m compileall -q vfl
+```
+
+Tests use authored synthetic inputs, WAV data and tiny subprocess fixtures. They
+exercise spectral behavior, strict parsing, stateful execution, mismatches,
+timeouts, stale output, resource coordination, source export, and viewer escaping.
+Optional tests with local vendor firmware belong in a separate private workspace.
+
+The [JSON contract](docs/contract.json) and [adapter guide](docs/adapters.md)
+describe the extension points. Preserve explicit capability boundaries when adding
+a device; a runnable demonstration is not evidence of original firmware support.
+The [input semantics](docs/input-semantics.md) define frame clocks, ADC queues,
+random substitution and the limits of read-log comparison.

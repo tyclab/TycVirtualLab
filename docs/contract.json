@@ -1,0 +1,264 @@
+{
+  "status": "Validated synthetic examples of the implementation contract v1",
+  "profile": {
+    "schema": "vfl.profile.v1",
+    "id": "example",
+    "description": "Authored synthetic contract fixture; no vendor implementation or measured data",
+    "input": {
+      "kind": "bands",
+      "channels": 7,
+      "minimum": 0,
+      "maximum": 1023,
+      "units": "adc-counts"
+    },
+    "buses": [
+      {
+        "id": "main",
+        "pixels": 16,
+        "order": "RGB",
+        "stage": "driver"
+      }
+    ],
+    "backend": {
+      "kind": "demo"
+    },
+    "firmware": [],
+    "geometry": {
+      "kind": "strips"
+    },
+    "target": {
+      "chip": "synthetic",
+      "isa": "synthetic",
+      "abi": "synthetic"
+    }
+  },
+  "trace": {
+    "schema": "vfl.trace.v1",
+    "input": {
+      "kind": "bands",
+      "channels": 7,
+      "minimum": 0,
+      "maximum": 1023,
+      "units": "adc-counts"
+    },
+    "seed": 1,
+    "clock_policy": "frame",
+    "provenance": {
+      "kind": "synthetic",
+      "description": "No device measurements"
+    },
+    "frames": [
+      {
+        "index": 0,
+        "time_us": 0,
+        "values": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "controls": {}
+      }
+    ]
+  },
+  "capture": {
+    "schema": "vfl.capture.v1",
+    "manifest": {
+      "profile_id": "example",
+      "execution_kind": "synthetic",
+      "backend": "demo",
+      "capabilities": {
+        "adc_log": false,
+        "clock_log": false,
+        "rng_log": false,
+        "state": true
+      },
+      "limitations": [
+        "Synthetic pipeline test; not vendor firmware"
+      ],
+      "input_sha256": "db657dc9ff202c933b145eb05e53118479179ec8b7ff7d398c7bcdf3ff6d6d18",
+      "profile_sha256": "f79b4e87e8414607c64e661c49ddf58b66f78886060d0de56352c4b882d11244",
+      "state_encoding": "bytes",
+      "experiment_sha256": "fc36a5f4a99cc0abc376ae1fb58ccab84cd4b259e1718aa699a035f7ebf2f70f"
+    },
+    "buses": [
+      {
+        "id": "main",
+        "pixels": 16,
+        "order": "RGB",
+        "stage": "driver"
+      }
+    ],
+    "frames": [
+      {
+        "index": 0,
+        "time_us": 0,
+        "buses": {
+          "main": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "state": {
+          "example": "00"
+        }
+      }
+    ],
+    "events": [],
+    "geometry": {
+      "kind": "strips"
+    }
+  },
+  "external_backend": {
+    "profile_backend": {
+      "kind": "external",
+      "command": [
+        "python3",
+        "adapter.py",
+        "{request}",
+        "{capture}"
+      ],
+      "timeout_s": 300,
+      "execution_kind": "synthetic"
+    },
+    "request": {
+      "schema": "vfl.request.v1",
+      "profile": {
+        "schema": "vfl.profile.v1",
+        "id": "example",
+        "description": "Authored synthetic contract fixture; no vendor implementation or measured data",
+        "input": {
+          "kind": "bands",
+          "channels": 7,
+          "minimum": 0,
+          "maximum": 1023,
+          "units": "adc-counts"
+        },
+        "buses": [
+          {
+            "id": "main",
+            "pixels": 16,
+            "order": "RGB",
+            "stage": "driver"
+          }
+        ],
+        "backend": {
+          "kind": "external",
+          "command": [
+            "python3",
+            "adapter.py",
+            "{request}",
+            "{capture}"
+          ],
+          "timeout_s": 300,
+          "execution_kind": "synthetic"
+        },
+        "firmware": [],
+        "geometry": {
+          "kind": "strips"
+        },
+        "target": {
+          "chip": "synthetic",
+          "isa": "synthetic",
+          "abi": "synthetic"
+        }
+      },
+      "trace": {
+        "schema": "vfl.trace.v1",
+        "input": {
+          "kind": "bands",
+          "channels": 7,
+          "minimum": 0,
+          "maximum": 1023,
+          "units": "adc-counts"
+        },
+        "seed": 1,
+        "clock_policy": "frame",
+        "provenance": {
+          "kind": "synthetic",
+          "description": "No device measurements"
+        },
+        "frames": [
+          {
+            "index": 0,
+            "time_us": 0,
+            "values": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "controls": {}
+          }
+        ]
+      },
+      "workdir": "/private/tycvl-example/run-001",
+      "request_id": "0123456789abcdef0123456789abcdef",
+      "identities": {
+        "input_sha256": "db657dc9ff202c933b145eb05e53118479179ec8b7ff7d398c7bcdf3ff6d6d18",
+        "profile_sha256": "564470f01610952ea6b0b8189bdb54494708a400ee470ef6429e2fe94f06b172",
+        "experiment_sha256": "fc36a5f4a99cc0abc376ae1fb58ccab84cd4b259e1718aa699a035f7ebf2f70f"
+      }
+    },
+    "response": "Write a vfl.capture.v1 JSON object to the capture path; return zero only after complete output. Runner validates frame count, indexes, timestamps, bus sizes, provenance and capabilities. Never infer original execution from successful process exit. Manifest must echo request_id and all identities from this request; missing or conflicting echoes fail.",
+    "paths": "Resolve configured firmware paths and command files relative to the profile directory. No shell command parsing. command arguments may use {request}, {capture}, {workdir}.",
+    "response_example": {
+      "schema": "vfl.capture.v1",
+      "manifest": {
+        "profile_id": "example",
+        "execution_kind": "synthetic",
+        "backend": "authored-external-example",
+        "capabilities": {
+          "adc_log": false,
+          "clock_log": false,
+          "rng_log": false,
+          "state": true
+        },
+        "limitations": [
+          "Synthetic pipeline test; not vendor firmware"
+        ],
+        "input_sha256": "db657dc9ff202c933b145eb05e53118479179ec8b7ff7d398c7bcdf3ff6d6d18",
+        "profile_sha256": "564470f01610952ea6b0b8189bdb54494708a400ee470ef6429e2fe94f06b172",
+        "state_encoding": "bytes",
+        "experiment_sha256": "fc36a5f4a99cc0abc376ae1fb58ccab84cd4b259e1718aa699a035f7ebf2f70f",
+        "request_id": "0123456789abcdef0123456789abcdef"
+      },
+      "buses": [
+        {
+          "id": "main",
+          "pixels": 16,
+          "order": "RGB",
+          "stage": "driver"
+        }
+      ],
+      "frames": [
+        {
+          "index": 0,
+          "time_us": 0,
+          "buses": {
+            "main": "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+          },
+          "state": {
+            "example": "00"
+          }
+        }
+      ],
+      "events": [],
+      "geometry": {
+        "kind": "strips"
+      }
+    }
+  },
+  "field_notes": {
+    "input_sha256": "SHA256 of canonical validated input JSON. Example values are real hashes of the included synthetic objects.",
+    "profile_sha256": "SHA256 of the canonical resolved profile. This example has no relative asset paths to resolve.",
+    "experiment_sha256": "SHA256 of semantic profile ID, normalized target, input specification, settings, buses, geometry and trace. Backend selection is excluded so independent implementations of the same experiment can be compared.",
+    "state_encoding": "Manifest value bytes (default) means each frame state value is hex-encoded raw bytes; sha256 means each value is a 64-character SHA256 digest of that named state region. With state capability true, each frame must contain the named state evidence.",
+    "request_id": "Fresh 32-character hexadecimal nonce generated for every real request; the example uses an authored fixed value.",
+    "workdir": "The example path is a placeholder. A real request contains its fresh absolute private run directory.",
+    "target": "Explicit chip, ISA and ABI identifiers. These examples are synthetic; a real device profile must identify its actual execution target without inferring it from a product name."
+  }
+}

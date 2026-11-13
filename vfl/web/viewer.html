@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src data:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>TycVirtualLab · Capture viewer</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+  <header>
+    <div><p class="eyebrow">TycVirtualLab</p><h1>Inspect a capture</h1></div>
+    <label class="file-button">Open capture JSON<input id="file" type="file" accept="application/json,.json"></label>
+  </header>
+  <main>
+    <p class="privacy">Files stay in this browser. No uploads, network requests or external libraries.</p>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section class="identity" aria-label="Capture identity">
+      <div><span class="label">Profile</span><strong id="profile">No capture loaded</strong></div>
+      <div><span class="label">Reported execution</span><strong id="execution">—</strong></div>
+      <div><span class="label">Backend</span><strong id="backend">—</strong></div>
+      <div><span class="label">Frames</span><strong id="count">0</strong></div>
+    </section>
+    <div class="workspace">
+      <section class="preview" aria-label="Frame playback">
+        <div class="toolbar">
+          <label>View <select id="view"><option value="strips">Pixel strips</option><option value="points" disabled>3D points</option></select></label>
+          <label id="yaw-label" hidden>Rotate <input id="yaw" type="range" min="-180" max="180" value="-28"></label>
+          <label id="pitch-label" hidden>Tilt <input id="pitch" type="range" min="-80" max="80" value="18"></label>
+        </div>
+        <canvas id="canvas" width="1000" height="450" tabindex="0" aria-label="LED frame preview; click a pixel to inspect its value"></canvas>
+        <p id="canvas-note" class="muted">Open a vfl.capture.v1 file, or export a run as HTML.</p>
+        <div class="transport">
+          <button id="previous" type="button" disabled aria-label="Previous frame">←</button>
+          <button id="play" type="button" disabled>Play</button>
+          <button id="next" type="button" disabled aria-label="Next frame">→</button>
+          <label>Speed <select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+          <output id="position">Frame — · — ms</output>
+        </div>
+        <label class="timeline-label" for="timeline">Recorded frame</label>
+        <input id="timeline" type="range" min="0" max="0" value="0" disabled>
+        <p class="muted">Playback follows recorded timestamps. The preview shows RGB values, not calibrated optical brightness.</p>
+      </section>
+      <aside>
+        <section class="panel"><h2>Evidence limits</h2><p class="muted">Execution kind and capabilities are capture declarations. This viewer does not certify how the data was produced.</p><ul id="limits"><li>No capture loaded.</li></ul><p id="geometry-note" class="muted"></p></section>
+        <section class="panel"><h2>Pixel inspector</h2><p id="pixel">Click a pixel in the preview.</p><div id="swatch" aria-hidden="true"></div></section>
+        <section class="panel"><h2>Recorded capabilities</h2><dl id="capabilities"></dl></section>
+      </aside>
+    </div>
+    <section class="details-grid">
+      <details><summary>Frame state and metadata</summary><pre id="frame-detail">No capture loaded.</pre></details>
+      <details><summary>Run manifest</summary><pre id="manifest-detail">No capture loaded.</pre></details>
+      <details><summary>Recorded events</summary><pre id="events-detail">No capture loaded.</pre></details>
+    </section>
+  </main>
+  <footer>Offline inspection · deterministic pixels and optical appearance are separate checks</footer>
+  <!-- VFL_CAPTURE -->
+  <script src="viewer.js"></script>
+</body>
+</html>
