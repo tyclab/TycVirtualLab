@@ -8,9 +8,11 @@ import secrets
 import struct
 import tempfile
 import unittest
+import sys
 
-from vfl.ghidra import _asset_paths, compile_commands, execute_request
+from vfl.ghidra import _asset_paths, _inner_timeout, compile_commands, execute_request
 from vfl.model import LabError, digest, experiment_digest, file_digest
+from vfl.runner import run_capture
 
 
 def tiny_elf(text=None):
@@ -37,11 +39,13 @@ def tiny_elf(text=None):
 def configuration(image):
     spec = {"kind": "scalar", "channels": 1, "minimum": 0, "maximum": 255, "units": "count"}
     profile = {"schema": "vfl.profile.v1", "id": "authored-xtensa-add-store", "input": spec,
+               "target": {"chip": "authored-xtensa", "isa": "xtensa", "abi": "xtensa-call0"},
                "buses": [{"id": "main", "pixels": 1, "order": "RGB", "stage": "logical"}],
                "geometry": {"kind": "strips"}, "settings": {},
-               "firmware": [{"role": "program", "path": str(image), "sha256": file_digest(image)}],
+               "firmware": [{"role": "program", "format": "elf", "path": str(image), "sha256": file_digest(image)}],
                "backend": {"kind": "external", "execution_kind": "original-firmware",
                            "command": ["python3", "-m", "vfl.ghidra", "{request}", "{capture}"],
+                           "timeout_s": 1000,
                            "options": {"ghidra": {
                                "elf_role": "program",
                                "abi": {"kind": "xtensa-call0", "stack_pointer": 12272, "return_sentinel": 16384},
@@ -151,6 +155,107 @@ class GhidraScheduleTests(unittest.TestCase):
         with self.assertRaisesRegex(LabError, "identities"):
             execute_request(path, Path(self.temp.name) / "capture.json")
 
+    def test_preflight_rejects_interlock_types_and_late_snapshot_errors(self):
+        for changes in ({"hold_files": "HOLD"}, {"hold_files": ["relative/HOLD"]},
+                        {"hold_files": [17]}, {"allow_uninitialized": "false"},
+                        {"allow_unused_input": 0},
+                        {"state": [{"id": "invalid id", "address": 8192, "size": 3}]},
+                        {"state": [{"id": "large", "address": 8192, "size": 8 * 1024 * 1024 + 1}]}):
+            p = copy.deepcopy(self.profile)
+            p["backend"]["options"]["ghidra"].update(changes)
+            with self.subTest(changes=changes), self.assertRaises(LabError):
+                self.compile(p)
+
+    def test_settings_require_exact_explicit_acknowledgement(self):
+        p = copy.deepcopy(self.profile)
+        p["settings"] = {"gain": 4}
+        with self.assertRaisesRegex(LabError, "settings_acknowledgements"):
+            self.compile(p)
+        p["backend"]["options"]["ghidra"]["settings_acknowledgements"] = {"gain": 3}
+        with self.assertRaises(LabError):
+            self.compile(p)
+        p["backend"]["options"]["ghidra"]["settings_acknowledgements"] = {"gain": 4}
+        self.compile(p)
+
+    def test_image_format_and_target_declaration_required(self):
+        for key in ("target", "format"):
+            p = copy.deepcopy(self.profile)
+            if key == "target":
+                p.pop("target")
+            else:
+                p["firmware"][0].pop("format")
+            with self.subTest(key=key), self.assertRaises(LabError):
+                self.compile(p)
+
+    def test_elf_machine_class_and_byte_order_checked_before_forcing_language(self):
+        from tests.test_firmware import elf_image
+        for bits, endian, machine in ((32, "<", 3), (64, "<", 94), (32, ">", 94)):
+            p = copy.deepcopy(self.profile)
+            self.image.write_bytes(elf_image(bits=bits, endian=endian, machine=machine))
+            p["firmware"][0]["sha256"] = file_digest(self.image)
+            with self.subTest(bits=bits, endian=endian, machine=machine), self.assertRaisesRegex(
+                    LabError, "32-bit little-endian Xtensa ELF"):
+                self.compile(p)
+
+    def test_overwrite_acknowledgement_is_explicit_bytes_and_sar_is_configurable(self):
+        p = copy.deepcopy(self.profile)
+        cfg = p["backend"]["options"]["ghidra"]
+        cfg["memory_regions"].append({"address": 4096, "size": 1, "allow_elf_overlap": True})
+        cfg["initialization"].append({"op": "register", "name": "SAR", "value": 31})
+        commands = self.compile(p)[0]
+        self.assertIn("wbytes 4096 00\n", commands)
+        self.assertIn("reg SAR 31\n", commands)
+
+    def test_inner_timeout_is_strictly_below_outer_timeout(self):
+        p = copy.deepcopy(self.profile)
+        p["backend"]["timeout_s"] = 100
+        self.assertEqual(_inner_timeout(p, {}), 90)
+        for value in (100, 101, 0, float("nan"), True):
+            with self.subTest(value=value), self.assertRaises(LabError):
+                _inner_timeout(p, {"timeout_s": value})
+
+    def test_fake_headless_driver_contract_through_outer_runner(self):
+        # This executable tests orchestration only. Actual instruction semantics
+        # are covered by the separately enabled, pinned Ghidra integration tests.
+        root = Path(self.temp.name)
+        fake = root / "fake-headless"
+        fake.write_text('''#!/usr/bin/env python3
+import hashlib,json,sys
+from pathlib import Path
+i=sys.argv.index('-postScript')
+script,commands,out,nonce,policy=sys.argv[i+1:]
+raw=Path(commands).read_bytes()
+binding={'schema':'tycvl.execution-binding.v1','request_id':nonce,'commands_sha256':hashlib.sha256(raw).hexdigest()}
+decl={'schema':'vfl.boundary-log.v1','adc_log':False,'clock_log':False,'rng_log':False,'engine':{'name':'ghidra-pcode','version':'fake-driver-test','language':'Xtensa:LE:32:default','abi':'xtensa-call0'}}
+lines=['E binding '+json.dumps(binding),'E instrumentation '+json.dumps(decl)]
+frame=-1
+for line in raw.decode().splitlines():
+ p=line.split()
+ if p[0]=='frame':frame=int(p[1])
+ if p[0]=='dump':lines.append('D '+p[1]+' '+('%02x'%(frame+1))*int(p[3]))
+lines.append('E done stubs=0 ms=1 maxsteps=6')
+Path(out).write_text('\\n'.join(lines)+'\\n')
+meta={**binding,'schema':'tycvl.ghidra-execution.v1','read_enforcement':'execute-read-fault','uninitialized_policy':policy,'uninitialized_reads':0,'uninitialized_regions':[],'uninitialized_regions_truncated':False}
+Path(out+'.execution.json').write_text(json.dumps(meta))
+''')
+        fake.chmod(0o755)
+        p = copy.deepcopy(self.profile)
+        p["backend"]["command"][0] = sys.executable
+        p["backend"]["env"] = {"PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+        p["backend"]["options"]["ghidra"]["headless"] = str(fake)
+        # Nix sandboxes do not provide /usr/bin/env. Launch this script through
+        # the exact test interpreter instead of relying on its text shebang.
+        interpreter = Path(sys.executable).resolve()
+        p["firmware"].append({"role": "fake_python", "path": str(interpreter), "sha256": file_digest(interpreter)})
+        p["backend"]["options"]["ghidra"]["launcher_role"] = "fake_python"
+        profile_path, trace_path = root / "profile.json", root / "trace.json"
+        profile_path.write_text(json.dumps(p))
+        trace_path.write_text(json.dumps(self.trace))
+        capture = json.loads(run_capture(profile_path, trace_path, root / "run").read_text())
+        self.assertEqual(capture["manifest"]["adapter_provenance"]["input_argument_values_supplied"], 2)
+        self.assertEqual(capture["manifest"]["adapter_provenance"]["read_counts"], {"adc": 0, "clock": 0, "rng": 0})
+        self.assertFalse(capture["manifest"]["capabilities"]["adc_log"])
+
 
 @unittest.skipUnless(os.environ.get("TYCVL_GHIDRA_INTEGRATION") == "1", "set TYCVL_GHIDRA_INTEGRATION=1 with Ghidra configured")
 class GhidraOriginalIntegrationTests(unittest.TestCase):
@@ -227,10 +332,78 @@ class GhidraOriginalIntegrationTests(unittest.TestCase):
             trace["frames"] = trace["frames"][:1]
             profile["backend"]["options"]["ghidra"]["frame_calls"] = [
                 {"op": "call", "address": 4096, "arguments": [24576]}]
-            with self.assertRaisesRegex(LabError, "read uninitialized state"):
+            with self.assertRaises(LabError):
                 self.run_profile(root, profile, trace)
             self.assertFalse((root / "capture.json").exists())
-            self.assertIn("read from uninitialized state", (root / "ghidra.stdout.log").read_text())
+            self.assertIn("Uninitialized emulation read", (root / "ghidra.output").read_text())
+
+    def test_guest_call_and_tail_jump_reach_hooks_and_return(self):
+        # Independently assembled: stack-save a0; call0 ADC hook; increment/store
+        # its return; restore a0; ret. A second entry tail-jumps to a return hook.
+        code = bytes.fromhex("12c1f002610085010022c20122430022430122430202210012c11080000000008000000006000000800000")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "authored-guest-hooks.elf"
+            image.write_bytes(tiny_elf(code))
+            profile, trace = configuration(image)
+            cfg = profile["backend"]["options"]["ghidra"]
+            cfg["hooks"] = [{"address": 4128, "kind": "adc"}, {"address": 4136, "kind": "return", "value": 17}]
+            cfg["frame_calls"] = [{"op": "call", "address": 4096, "arguments": [0, 8192]},
+                                  {"op": "call", "address": 4132}]
+            capture = self.run_profile(root, profile, trace)
+            self.assertEqual([frame["buses"]["main"] for frame in capture["frames"]], ["010101", "020202"])
+            self.assertEqual([event["value"] for event in capture["events"]], [0, 17, 1, 17])
+            self.assertEqual(capture["manifest"]["completion"]["stubs"], 4)
+            self.assertFalse(capture["manifest"]["capabilities"]["rng_log"])
+
+    def test_windowed_call_and_loop_fail_before_capture(self):
+        # Independently assembled call8 _start and j _start, respectively.
+        for name, code, message in (("windowed", "e5ffff", "windowed instruction unsupported"),
+                                    ("loop", "06ffff", "per-call instruction/step limit exceeded")):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / (name + ".elf")
+                image.write_bytes(tiny_elf(bytes.fromhex(code)))
+                profile, trace = configuration(image)
+                profile["backend"]["options"]["ghidra"]["instruction_limit"] = 8
+                with self.assertRaises(LabError):
+                    self.run_profile(root, profile, trace)
+                self.assertIn(message, (root / "ghidra.output").read_text())
+                self.assertFalse((root / "capture.json").exists())
+
+    def test_zeroing_loaded_elf_requires_explicit_override(self):
+        for allowed in (False, True):
+            with self.subTest(allowed=allowed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / "authored-padding.elf"
+                image.write_bytes(tiny_elf(bytes.fromhex("22c201224300224301224302800000aa")))
+                profile, trace = configuration(image)
+                cfg = profile["backend"]["options"]["ghidra"]
+                cfg["memory_regions"].append({"address": 4111, "size": 1, "allow_elf_overlap": allowed})
+                if allowed:
+                    capture = self.run_profile(root, profile, trace)
+                    self.assertEqual(capture["frames"][0]["buses"]["main"], "010101")
+                else:
+                    with self.assertRaises(LabError):
+                        self.run_profile(root, profile, trace)
+                    self.assertIn("zero region overlaps initialized ELF memory", (root / "ghidra.output").read_text())
+
+    def test_unused_input_requires_explicit_optout(self):
+        for allowed in (False, True):
+            with self.subTest(allowed=allowed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                image = root / "authored-input-independent.elf"
+                image.write_bytes(tiny_elf())
+                profile, trace = configuration(image)
+                cfg = profile["backend"]["options"]["ghidra"]
+                cfg["frame_calls"][0]["arguments"] = [0, 8192]
+                cfg["allow_unused_input"] = allowed
+                if allowed:
+                    capture = self.run_profile(root, profile, trace)
+                    self.assertEqual(capture["manifest"]["adapter_provenance"]["input_argument_values_supplied"], 0)
+                else:
+                    with self.assertRaisesRegex(LabError, "no frame observed ADC input"):
+                        self.run_profile(root, profile, trace)
 
 
 if __name__ == "__main__":

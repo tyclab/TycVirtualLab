@@ -53,9 +53,21 @@ locations, sequence counters and host call sites are useful diagnostics but do n
 by themselves define semantic equivalence between machine code and a port.
 
 Event comparison must state which common read kinds were compared and how many
-observations existed. An empty log is not successful evidence that two input paths
-agree. Strict state/RGB comparison remains useful when only one implementation has
-read instrumentation, but it must not claim read-log coverage.
+observations existed. `event_counts.left` and `.right` report observed ADC, clock
+and RNG counts; `events_compared_by_kind` and `events_compared` count successful
+comparisons by kind and in total. Only kinds whose capabilities are enabled on
+both sides are eligible. A kind with no observations on either side is omitted
+from `scope.event_kinds` and listed in `scope.omitted_empty_event_kinds`. A kind
+with observations on only one side fails event comparison, as does a request with
+no remaining observed common kinds.
+
+The comparison uses kind, frame, phase, optional timestamp and returned value.
+ADC adds channel, clock adds units, and RNG adds `mode` (`raw` or `bounded`) plus
+`bound` for bounded mode. Missing semantic fields fail comparison. Call sites,
+addresses, diagnostic sequence numbers, operation names and internal RNG state
+are excluded. An empty log is not successful evidence that two input paths agree.
+Strict state/RGB comparison remains useful when only one implementation has read
+instrumentation, but it must not claim read-log coverage.
 
 ## Audio model boundary
 

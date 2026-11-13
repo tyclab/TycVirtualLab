@@ -8,15 +8,24 @@ no network protocol, remote service or dependency on a particular emulator.
 ## Profile
 
 Profiles use `vfl.profile.v1` with `id`, `input`, `buses`, `backend`, optional
-`settings`, `geometry` and `firmware`. The backend argument list can include
+`settings`, `geometry`, `target` and `firmware`. A target declares `chip`, `isa`
+and `abi`; unspecified identity is not evidence of CPU or calling-convention
+support. Individual adapters can require a specific declared target. The backend argument list can include
 `{request}`, `{capture}` and `{workdir}`. Relative script and firmware paths resolve
 against the profile directory. The default process working directory is a fresh
 private run directory; `backend.cwd` can select another location explicitly.
+Profile and asset keys are closed sets: use their `metadata` objects for private
+annotations, and `backend.options` for adapter-specific configuration. Unknown
+fields such as a misspelled checksum key are rejected.
 
 An external backend declares `execution_kind`, `timeout_s`, optional `env`,
-`hold_file`, `resource_lock` and `queue_timeout_s`. Environment additions are local
+`hold_file`, `resource_lock`, `queue_timeout_s` and adapter-specific `options`.
+Environment additions are local
 configuration and remain private. Firmware assets have `role`, `path` and an
 optional expected `sha256`; an original-firmware claim requires declared assets.
+An asset's optional `format` (`elf`, `esp32`, or `esp8266`) enables bounded image
+inspection and available target checks. The Ghidra backend requires `format: elf`
+on its selected program asset. Parsing a format does not establish runtime support.
 List ROM, relevant initialization files and executable helpers as assets when
 they affect reproducibility, not just the main application image.
 
@@ -44,6 +53,11 @@ The request has:
 Copy `request_id` and the three identity fields into the returned capture's
 `manifest` **from this request**. The runner rejects missing or conflicting values.
 This freshness handshake is not a security boundary against a malicious adapter.
+It binds the response to the request's declared identities; it does not prove
+that the execution consumed every input value or implemented each setting.
+The public Ghidra backend additionally verifies a nonce and SHA256 emitted by
+its script over the exact command bytes executed. Private setting mappings and
+any acknowledged assumptions still require independent review.
 
 `python -m vfl.demo_adapter REQUEST CAPTURE` is a complete synthetic external
 adapter example. Install the package or provide an explicit Python module path
@@ -57,6 +71,15 @@ Its frames must match the input indexes and timestamps exactly. Each frame has a
 State should include all relevant persistent memory, including pixel history and
 heap objects where needed; list any exclusions explicitly.
 
+`manifest.state_encoding` defaults to `bytes`: each named state value is the
+hexadecimal encoding of its raw snapshot bytes. With `state_encoding: sha256`,
+each value is the lowercase SHA256 digest of those same raw bytes, computed as
+`hashlib.sha256(bytes.fromhex(raw_snapshot)).hexdigest()`. Hash the decoded bytes,
+not the hexadecimal text, JSON representation, tag, address or other metadata.
+Each configured region must appear in every frame. Hash mismatches identify the
+region; they cannot identify a differing memory offset. Comparison requires both
+captures to use the same state encoding.
+
 The manifest declares `profile_id`, `execution_kind`, `backend`, `limitations` and
 boolean capabilities `adc_log`, `clock_log`, `rng_log`, `state`. These describe
 actual instrumentation. Do not synthesize a read log from input values and claim
@@ -67,6 +90,17 @@ include `time_us`, `call_site`, `value`, `channel` or other backend details.
 Initialization events use `frame: -1` and `phase: initialization`; normal events
 refer to an existing frame. For deterministic replay, record the read result and
 call site, including the order in which time and random values were consumed.
+
+`compare --events` compares the common observed ADC, clock and RNG streams using
+semantic fields: kind, frame, phase, optional timestamp and returned value;
+ADC also requires channel, clock requires units, and RNG requires `mode` (`raw`
+or `bounded`) plus `bound` for bounded mode. Diagnostic call sites, addresses,
+sequence counters, operation names and internal RNG state are excluded.
+Missing semantic fields cannot establish event equivalence; such captures can
+still be inspected or compared for RGB/state without `--events`.
+Reports include observed and compared counts by kind. A common kind empty on
+both sides is explicitly omitted; a kind observed on only one side fails.
+Event comparison also fails when no common observed kind remains.
 
 ## Ghidra dump bridge
 

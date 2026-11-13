@@ -256,7 +256,7 @@
     "input_sha256": "SHA256 of canonical validated input JSON. Example values are real hashes of the included synthetic objects.",
     "profile_sha256": "SHA256 of the canonical resolved profile. This example has no relative asset paths to resolve.",
     "experiment_sha256": "SHA256 of semantic profile ID, normalized target, input specification, settings, buses, geometry and trace. Backend selection is excluded so independent implementations of the same experiment can be compared.",
-    "state_encoding": "Manifest value bytes (default) means each frame state value is hex-encoded raw bytes; sha256 means each value is a 64-character SHA256 digest of that named state region. With state capability true, each frame must contain the named state evidence.",
+    "state_encoding": "Manifest value bytes (default) means each frame state value is hex-encoded raw bytes; sha256 means each value is the lowercase 64-character SHA256 digest of the decoded raw snapshot bytes, not of hex text, JSON, tag or address. With state capability true, each frame must contain the named state evidence.",
     "request_id": "Fresh 32-character hexadecimal nonce generated for every real request; the example uses an authored fixed value.",
     "workdir": "The example path is a placeholder. A real request contains its fresh absolute private run directory.",
     "target": "Explicit chip, ISA and ABI identifiers. These examples are synthetic; a real device profile must identify its actual execution target without inferring it from a product name."

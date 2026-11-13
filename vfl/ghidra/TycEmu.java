@@ -1,6 +1,6 @@
 // TycVirtualLab: a generic, bounded Xtensa call0 execution boundary.
 // @category TycVirtualLab
-// Usage: -postScript TycEmu.java COMMANDS OUTPUT REQUEST_NONCE
+// Usage: -postScript TycEmu.java COMMANDS OUTPUT REQUEST_NONCE strict|allow
 // All addresses, memory contents, ABI setup and hooks come from COMMANDS.
 // No device firmware, rendering algorithms or device address defaults live here.
 //
@@ -75,6 +75,7 @@ public class TycEmu extends GhidraScript {
     PrintWriter output;
     final Gson json = new Gson();
     final Map<Long, Hook> hooks = new HashMap<>();
+    final List<long[]> importedRanges = new ArrayList<>();
     long initializedBytes, outputBytes;
     long outputLimit = 64L * 1024 * 1024;
     long stepLimit = 1_000_000, steps, maxSteps, stubHits;
@@ -85,6 +86,42 @@ public class TycEmu extends GhidraScript {
     String[] argumentRegisters;
     long stackAddress, sentinel;
     boolean abiReady, sawFrame, seedReady;
+    boolean allowUninitialized = false;
+    long uninitializedReadCount = 0;
+    final Set<String> uninitializedReadRegions = new LinkedHashSet<>();
+    boolean uninitializedRegionsTruncated = false;
+
+    void recordUninitializedRead(AddressSetView ranges) {
+        uninitializedReadCount++;
+        String detail = ranges.toString();
+        if (detail.length() > 512) detail = detail.substring(0, 512) + "...";
+        if (uninitializedReadRegions.size() < 256) uninitializedReadRegions.add(detail);
+        else if (!uninitializedReadRegions.contains(detail)) uninitializedRegionsTruncated = true;
+        if (!allowUninitialized) throw new AccessPcodeExecutionException("Uninitialized emulation read: " + detail);
+    }
+
+    class GuardedStatePiece extends BytesPcodeExecutorStatePiece {
+        GuardedStatePiece(Language language, PcodeStateCallbacks callbacks) {
+            super(language, callbacks);
+        }
+
+        @Override protected BytesPcodeExecutorStateSpace getForSpace(AddressSpace space, boolean toWrite) {
+            // First reads must visit the same checked space as later reads;
+            // the base null-space path otherwise supplies zero without warning.
+            return super.getForSpace(space, true);
+        }
+
+        @Override protected BytesPcodeExecutorStateSpace newSpace(AddressSpace space) {
+            return new BytesPcodeExecutorStateSpace(language, space, this) {
+                @Override protected void warnUninit(AddressSetView ranges) {
+                    // Ghidra 12.0.4 calls this only for EXECUTE_READ. Decoder
+                    // lookahead and initial register RE_INIT keep their normal
+                    // semantics; missing instruction bytes still fail decode.
+                    recordUninitializedRead(ranges);
+                }
+            };
+        }
+    }
 
     static void require(boolean condition, String message) {
         if (!condition) throw new IllegalArgumentException(message);
@@ -270,6 +307,9 @@ public class TycEmu extends GhidraScript {
                 long pc = thread.getCounter().getOffset();
                 if (pc == sentinel) break;
                 require(handleHook(pc), "unexpected breakpoint at " + hex(pc));
+                // A tail jump into a hook preserves the harness return address.
+                // Do not attempt to decode the sentinel after that hook returns.
+                if (thread.getCounter().getOffset() == sentinel) break;
             }
         }
         maxSteps = Math.max(maxSteps, steps);
@@ -353,7 +393,13 @@ public class TycEmu extends GhidraScript {
             }
             case "zero": {
                 arity(words, 3); int size = (int) number(words[2], MAX_TRANSFER);
-                require(size > 0, "zero region must be nonempty"); write(u32(words[1]), new byte[size]); break;
+                require(size > 0, "zero region must be nonempty");
+                long start = u32(words[1]); range(start, size);
+                for (long[] imported : importedRanges) {
+                    require(start + size <= imported[0] || start >= imported[1],
+                        "zero region overlaps initialized ELF memory; use an explicitly acknowledged byte-write recipe");
+                }
+                write(start, new byte[size]); break;
             }
             case "wbytes": {
                 arity(words, 3); String text = words[2];
@@ -401,6 +447,12 @@ public class TycEmu extends GhidraScript {
         ram = language.getAddressFactory().getDefaultAddressSpace();
         require(ram.getSize() == 32 && ram.getAddressableUnitSize() == 1, "only byte-addressed 32-bit memory is supported");
         emu = new PcodeEmulator(language) {
+            @Override protected PcodeExecutorState<byte[]> createSharedState() {
+                return new DefaultPcodeExecutorState<>(new GuardedStatePiece(language, cb.wrapFor(null)));
+            }
+            @Override protected PcodeExecutorState<byte[]> createLocalState(PcodeThread<byte[]> thread) {
+                return new DefaultPcodeExecutorState<>(new GuardedStatePiece(language, cb.wrapFor(thread)));
+            }
             @Override protected PcodeUseropLibrary<byte[]> createUseropLibrary() {
                 return super.createUseropLibrary().compose(new BoundaryOps());
             }
@@ -434,6 +486,7 @@ public class TycEmu extends GhidraScript {
             byte[] bytes = new byte[(int) block.getSize()];
             require(block.getBytes(block.getStart(), bytes) == bytes.length, "incomplete imported memory block");
             write(block.getStart().getOffset(), bytes);
+            importedRanges.add(new long[] {block.getStart().getOffset(), block.getStart().getOffset() + bytes.length});
         }
         thread = emu.newThread();
         for (int index = 0; index < 16; index++) writeRegister("a" + index, 0);
@@ -442,12 +495,22 @@ public class TycEmu extends GhidraScript {
 
     @Override public void run() throws Exception {
         String[] args = getScriptArgs();
-        require(args.length == 3 && args[2].matches("[0-9a-f]{32}"), "expected command-file, fresh output-file and request nonce");
+        require(args.length == 4 && args[2].matches("[0-9a-f]{32}")
+            && (args[3].equals("strict") || args[3].equals("allow")),
+            "expected command-file, fresh output-file, request nonce and uninitialized-read policy");
+        allowUninitialized = args[3].equals("allow");
         Path commands = Paths.get(args[0]);
         require(Files.isRegularFile(commands) && Files.size(commands) <= MAX_COMMAND_BYTES, "invalid or oversized command file");
         byte[] commandBytes = Files.readAllBytes(commands);
         require(commandBytes.length <= MAX_COMMAND_BYTES, "command file grew past limit");
         String commandHash = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(commandBytes));
+        Set<String> declaredHooks = new HashSet<>();
+        for (String line : new String(commandBytes, StandardCharsets.UTF_8).split("\\R")) {
+            String[] words = line.split("#", 2)[0].trim().split("\\s+");
+            if (words.length >= 3 && words[0].equals("hook")) declaredHooks.add(words[2]);
+        }
+        Path executionPath = Paths.get(args[1] + ".execution.json");
+        require(!Files.exists(executionPath), "execution metadata already exists");
         long started = System.nanoTime();
         int lineNumber = 0;
         try (PrintWriter writer = new PrintWriter(Files.newBufferedWriter(Paths.get(args[1]), StandardCharsets.UTF_8,
@@ -457,7 +520,10 @@ public class TycEmu extends GhidraScript {
                 emit("E binding " + json.toJson(Map.of("schema", "tycvl.execution-binding.v1",
                     "request_id", args[2], "commands_sha256", commandHash)));
                 initialize();
-                emit("E instrumentation " + json.toJson(Map.of("schema", "vfl.boundary-log.v1", "adc_log", true, "clock_log", true, "rng_log", true,
+                emit("E instrumentation " + json.toJson(Map.of("schema", "vfl.boundary-log.v1",
+                    "adc_log", declaredHooks.contains("adc"),
+                    "clock_log", declaredHooks.contains("millis") || declaredHooks.contains("micros"),
+                    "rng_log", declaredHooks.contains("rng"),
                     "engine", Map.of("name", "ghidra-pcode", "version", Application.getApplicationVersion(),
                         "language", language.getLanguageID().getIdAsString(), "abi", "xtensa-call0"))));
                 try (BufferedReader reader = new BufferedReader(new StringReader(new String(commandBytes, StandardCharsets.UTF_8)))) {
@@ -471,6 +537,19 @@ public class TycEmu extends GhidraScript {
                     }
                 }
                 require(abiReady, "missing ABI declaration");
+                Map<String, Object> execution = new LinkedHashMap<>();
+                execution.put("schema", "tycvl.ghidra-execution.v1");
+                execution.put("request_id", args[2]);
+                execution.put("commands_sha256", commandHash);
+                execution.put("read_enforcement", "execute-read-fault");
+                execution.put("uninitialized_policy", args[3]);
+                execution.put("uninitialized_reads", uninitializedReadCount);
+                execution.put("uninitialized_regions", uninitializedReadRegions);
+                execution.put("uninitialized_regions_truncated", uninitializedRegionsTruncated);
+                try (Writer metadata = Files.newBufferedWriter(executionPath, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
+                    json.toJson(execution, metadata);
+                }
                 emit("E done stubs=" + stubHits + " ms=" + ((System.nanoTime() - started) / 1_000_000)
                     + " maxsteps=" + maxSteps);
             } catch (Exception error) {

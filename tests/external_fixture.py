@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -21,6 +22,23 @@ def main():
     parser.add_argument("--capture")
     parser.add_argument("--auxiliary")
     args = parser.parse_args()
+    if args.mode == "nested":
+        from vfl.runner import run_process
+        Path(args.auxiliary + ".backend.pid").write_text(str(os.getpid()))
+        run_process([sys.executable, __file__, "--mode", "nested-leaf", "--auxiliary", args.auxiliary],
+                    Path(args.auxiliary).parent, args.auxiliary + ".nested.out", args.auxiliary + ".nested.err",
+                    30, termination_grace_s=0.0)
+        return
+    if args.mode == "nested-leaf":
+        from vfl.runner import inherited_resource_lock_fds
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        program = "import pathlib,sys,time,signal; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(1.2); pathlib.Path(sys.argv[1]).write_text('nested child survived'); time.sleep(30)"
+        child = subprocess.Popen([sys.executable, "-c", program, args.auxiliary],
+                                 pass_fds=inherited_resource_lock_fds())
+        Path(args.auxiliary + ".nested-child.pid").write_text(str(child.pid))
+        Path(args.auxiliary + ".leaf.pid").write_text(str(os.getpid()))
+        time.sleep(30)
+        return
     if args.mode == "log-limit":
         sys.stdout.write("x" * 16_384)
         sys.stdout.flush()

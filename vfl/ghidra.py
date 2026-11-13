@@ -15,8 +15,9 @@ import shutil
 import sys
 
 from .hsemu import capture_from_output
+from .firmware import inspect_image
 from .model import (LabError, compatible_input, digest, experiment_digest, file_digest,
-                    integer, load_json, private_path, require, validate_capture,
+                    identifier, integer, load_json, private_path, require, validate_capture,
                     validate_profile, validate_trace, write_json)
 from .runner import run_process
 
@@ -24,7 +25,7 @@ U32 = 0xffffffff
 MAX_MEMORY = 32 * 1024 * 1024
 MAX_TRANSFER = 16 * 1024 * 1024
 MAX_COMMANDS = 64 * 1024 * 1024
-REG = re.compile(r"(?:a(?:[0-9]|1[0-5])|PS)")
+REG = re.compile(r"(?:a(?:[0-9]|1[0-5])|PS|SAR)")
 
 
 def _u32(value, name):
@@ -75,6 +76,8 @@ def _operation(operation, frame=None):
     if kind == "register":
         _keys(operation, {"op", "name", "value"})
         require(isinstance(operation["name"], str) and REG.fullmatch(operation["name"]), "unsupported register")
+        if operation["name"] == "SAR":
+            integer(operation["value"], "SAR value", 0, 63)
         return f"reg {operation['name']} {_u32(operation['value'], 'register value')}"
     raise LabError("unsupported initialization operation")
 
@@ -87,7 +90,7 @@ def _asset_paths(profile):
         require(path.is_absolute() and path.is_file() and not path.is_symlink(), "assets must be resolved regular files")
         actual = file_digest(path)
         require(not entry.get("sha256") or entry["sha256"] == actual, "asset hash mismatch")
-        result[entry["role"]] = {"path": path, "sha256": actual}
+        result[entry["role"]] = {"path": path, "sha256": actual, "format": entry.get("format")}
     return result
 
 
@@ -102,12 +105,22 @@ def compile_commands(profile, trace, assets):
     _keys(config, {"elf_role", "abi", "memory_regions", "hooks", "initialization", "frame_calls", "outputs"},
           {"binary_mappings", "state", "state_encoding", "instruction_limit", "output_limit",
            "max_frames", "headless", "launcher_role", "launcher_environment", "timeout_s",
-           "allow_uninitialized", "hold_files", "adc_policy"})
+           "allow_uninitialized", "hold_files", "adc_policy", "settings_acknowledgements", "allow_unused_input"})
+    for key in ("allow_uninitialized", "allow_unused_input"):
+        require(type(config.get(key, False)) is bool, f"{key} must be boolean")
+    holds = config.get("hold_files", [])
+    require(isinstance(holds, list) and len(holds) <= 128
+            and all(isinstance(path, str) and path and "\0" not in path and Path(path).is_absolute() for path in holds),
+            "hold_files must be a list of absolute path strings")
+    settings = profile.get("settings", {})
+    acknowledged = config.get("settings_acknowledgements", {})
+    require(isinstance(acknowledged, dict) and digest(acknowledged) == digest(settings),
+            "every setting key and value requires explicit settings_acknowledgements")
     abi = config["abi"]
     _keys(abi, {"kind", "stack_pointer", "return_sentinel"}, {"registers"})
     require(abi["kind"] == "xtensa-call0", "only Xtensa call0 ABI is implemented; windowed ABI is unsupported")
     target_abi = profile.get("target", {}).get("abi", "unspecified")
-    require(target_abi in {"unspecified", "xtensa-call0"}, "declared target ABI differs from implemented call0 boundary")
+    require(target_abi == "xtensa-call0", "declare target ABI xtensa-call0 for this execution boundary")
     expected_regs = {"pc": "pc", "sp": "a1", "return_address": "a0",
                      "arguments": ["a2", "a3", "a4", "a5", "a6", "a7"], "result": "a2"}
     require(abi.get("registers", expected_regs) == expected_regs, "unsupported Xtensa call0 register layout")
@@ -115,6 +128,11 @@ def compile_commands(profile, trace, assets):
     sentinel = _u32(abi["return_sentinel"], "return sentinel")
     require(stack % 16 == 0, "stack pointer must be aligned to 16 bytes")
     require(config["elf_role"] in assets, "ELF asset role is absent")
+    require(assets[config["elf_role"]].get("format") == "elf", "the program asset must explicitly declare format elf")
+    image = inspect_image(assets[config["elf_role"]]["path"], format="elf")
+    require(image["sha256"] == assets[config["elf_role"]]["sha256"], "ELF asset changed during preflight")
+    require(image["machine_id"] == 94 and image["elf_class"] == 32 and image["byte_order"] == "little",
+            "Ghidra call0 backend requires a 32-bit little-endian Xtensa ELF")
     require(trace["clock_policy"] == "frame", "this backend requires a frozen clock per frame")
     require(trace["input"]["kind"] in {"bands", "scalar"}, "this backend accepts integer scalar/band inputs")
     limit = integer(config.get("instruction_limit", 500000), "instruction limit", 1, 10000000)
@@ -129,13 +147,20 @@ def compile_commands(profile, trace, assets):
              f"abi pc a1 a0 a2,a3,a4,a5,a6,a7 a2 {stack} {sentinel}"]
     total_memory, spans = 0, []
     for item in regions:
-        _keys(item, {"address", "size"})
+        _keys(item, {"address", "size"}, {"allow_elf_overlap"})
+        require(type(item.get("allow_elf_overlap", False)) is bool, "allow_elf_overlap must be boolean")
         address, size = _region(item["address"], item["size"])
         require(all(address + size <= lo or address >= hi for lo, hi in spans), "zero regions overlap")
         spans.append((address, address + size))
         total_memory += size
-        for start in range(0, size, MAX_TRANSFER):
-            lines.append(f"zero {address + start} {min(MAX_TRANSFER, size - start)}")
+        if item.get("allow_elf_overlap", False):
+            # An acknowledged overwrite becomes an explicit byte-write recipe.
+            # Ordinary zero commands are guarded against ELF overlap by Java.
+            for start in range(0, size, 1024):
+                lines.append(f"wbytes {address + start} {'00' * min(1024, size - start)}")
+        else:
+            for start in range(0, size, MAX_TRANSFER):
+                lines.append(f"zero {address + start} {min(MAX_TRANSFER, size - start)}")
     require(any(lo <= stack - 1 < hi for lo, hi in spans), "stack must have an explicitly initialized memory region")
     mappings = config.get("binary_mappings", [])
     require(isinstance(mappings, list) and len(mappings) <= 128, "invalid binary mappings")
@@ -194,9 +219,12 @@ def compile_commands(profile, trace, assets):
         require(isinstance(entries, list) and len(entries) <= 128, "invalid capture regions")
         for n, item in enumerate(entries):
             _keys(item, {"id", "address", "size"})
-            require(isinstance(item["id"], str) and item["id"] and item["id"] not in mapping.values(), "invalid or duplicate region id")
+            identifier(item["id"], "capture region id")
+            require(item["id"] not in mapping.values(), "duplicate region id")
             address, size = _region(item["address"], item["size"])
             require(size <= MAX_TRANSFER, "capture region exceeds transfer limit")
+            if category == "state":
+                require(size <= 8 * 1024 * 1024, "state region exceeds normalized snapshot limit")
             tag = f"{category}{n}"
             mapping[tag] = item["id"]
             dump_lines.append(f"dump {tag} {address} {size}")
@@ -219,6 +247,14 @@ def compile_commands(profile, trace, assets):
     return commands, output_tags, state_tags
 
 
+def _inner_timeout(profile, config):
+    outer = profile["backend"].get("timeout_s", 300)
+    timeout = config.get("timeout_s", min(300, 0.9 * outer))
+    require(type(timeout) in (int, float) and 0 < timeout < outer and timeout <= 86400,
+            "Ghidra timeout must be positive and shorter than the outer backend timeout")
+    return timeout
+
+
 def execute_request(request_path, capture_path):
     request = load_json(request_path)
     require(request.get("schema") == "vfl.request.v1", "unsupported request schema")
@@ -236,22 +272,25 @@ def execute_request(request_path, capture_path):
     assets = _asset_paths(profile)
     commands, output_tags, state_tags = compile_commands(profile, trace, assets)
     config = profile["backend"]["options"]["ghidra"]
+    timeout = _inner_timeout(profile, config)
     for path in config.get("hold_files", []):
-        require(not Path(path).exists(), "emulator HOLD is active")
-    executable = os.environ.get("GHIDRA_HEADLESS") or config.get("headless") or shutil.which("ghidra-analyzeHeadless")
+        require(not os.path.lexists(path), "emulator HOLD is active")
+    executable = config.get("headless") or os.environ.get("GHIDRA_HEADLESS") or shutil.which("ghidra-analyzeHeadless")
     require(isinstance(executable, str) and Path(executable).is_file(), "configure a Ghidra headless executable")
     script = Path(__file__).with_name("ghidra") / "TycEmu.java"
     require(script.is_file(), "packaged Ghidra script missing")
     fingerprints = {"driver": file_digest(__file__), "script": file_digest(script), "headless": file_digest(executable)}
     command_path, output_path = workdir / "ghidra.commands", workdir / "ghidra.output"
-    require(not command_path.exists() and not output_path.exists(), "stale Ghidra artifacts rejected")
+    execution_path = Path(str(output_path) + ".execution.json")
+    require(not command_path.exists() and not output_path.exists() and not execution_path.exists(), "stale Ghidra artifacts rejected")
     with command_path.open("x") as dest:
         dest.write(commands)
     project = workdir / "ghidra-project"
     project.mkdir()
     argv = [executable, str(project), "experiment", "-import", str(assets[config["elf_role"]]["path"]),
             "-processor", "Xtensa:LE:32:default", "-noanalysis", "-deleteProject",
-            "-scriptPath", str(script.parent), "-postScript", script.name, str(command_path), str(output_path), request["request_id"]]
+            "-scriptPath", str(script.parent), "-postScript", script.name, str(command_path), str(output_path), request["request_id"],
+            "allow" if config.get("allow_uninitialized", False) else "strict"]
     if config.get("launcher_role"):
         require(config["launcher_role"] in assets, "launcher asset is absent")
         argv.insert(0, str(assets[config["launcher_role"]]["path"]))
@@ -259,24 +298,46 @@ def execute_request(request_path, capture_path):
     extra = config.get("launcher_environment", {})
     require(isinstance(extra, dict) and all(isinstance(k, str) and isinstance(v, str) and "=" not in k and "\0" not in k + v for k, v in extra.items()), "invalid launcher environment")
     env.update(extra)
-    timeout = integer(config.get("timeout_s", 300), "Ghidra timeout", 1, 86400)
+    isolated = {}
+    for name in ("settings", "cache", "temp"):
+        directory = workdir / f"ghidra-{name}"
+        directory.mkdir()
+        isolated[name] = directory
+    # JAVA_TOOL_OPTIONS uses its own argument quoting, not a shell. Reject
+    # embedded quote characters rather than producing an ambiguous JVM option.
+    require(all('"' not in str(path) and "\\" not in str(path) for path in isolated.values()),
+            "Ghidra cache paths may not contain quote or backslash characters")
+    properties = " ".join(f'-Dapplication.{name}dir="{path}"' for name, path in isolated.items())
+    env["JAVA_TOOL_OPTIONS"] = (env.get("JAVA_TOOL_OPTIONS", "") + " " + properties).strip()
+    for path in config.get("hold_files", []):
+        require(not os.path.lexists(path), "emulator HOLD became active before launch")
     run_process(argv, workdir, workdir / "ghidra.stdout.log", workdir / "ghidra.stderr.log", timeout, env,
-                output_limit=64 * 1024 * 1024)
+                output_limit=64 * 1024 * 1024, termination_grace_s=0.0)
     require(output_path.is_file() and not output_path.is_symlink(), "Ghidra produced no regular output")
     require(output_path.stat().st_size <= config.get("output_limit", 64 * 1024 * 1024), "Ghidra output limit exceeded")
     log = (workdir / "ghidra.stdout.log").read_text() + (workdir / "ghidra.stderr.log").read_text()
     warnings = [line.strip() for line in log.splitlines() if "read from uninitialized state" in line]
-    require(type(config.get("allow_uninitialized", False)) is bool, "allow_uninitialized must be boolean")
-    require(not warnings or config.get("allow_uninitialized", False), "Ghidra read uninitialized state; declare missing initialization instead of accepting implicit values")
     require("SCRIPT ERROR" not in log, "Ghidra script reported an error")
+    require(execution_path.is_file() and not execution_path.is_symlink(), "Ghidra execution metadata missing")
+    execution = load_json(execution_path, maximum_bytes=1024 * 1024)
+    require(execution.get("schema") == "tycvl.ghidra-execution.v1"
+            and execution.get("request_id") == request["request_id"]
+            and execution.get("commands_sha256") == file_digest(command_path), "execution metadata binding differs")
+    policy = "allow" if config.get("allow_uninitialized", False) else "strict"
+    require(execution.get("uninitialized_policy") == policy
+            and execution.get("read_enforcement") == "execute-read-fault", "uninitialized read enforcement was not active")
+    undefined_count = integer(execution.get("uninitialized_reads"), "uninitialized read count")
+    require(policy == "allow" or undefined_count == 0, "Ghidra executed an uninitialized read under strict policy")
     limitations = ["Original instructions execute at configured routine boundaries; no full SoC, board boot, interrupts or physical LED wire timing are modeled.",
                    "Only Xtensa call0 is supported. Windowed calls and unimplemented instructions fail execution.",
                    "Clock is frozen per frame. ADC and RNG hooks return the declared schedule and seeded xorshift32 surrogate; other hooks have only their explicit configured behavior."]
     limitations.append("ADC consumes each frame's input queue once and fails on exhaustion. Unconsumed input values are permitted."
                        if config.get("adc_policy", "strict") == "strict" else
                        "ADC explicitly cycles the held input queue within each frame; repeated reads revisit supplied channel values.")
-    if warnings:
-        limitations.append("Profile explicitly permits uninitialized reads; results depend on the pinned Ghidra runtime's handling. Warning counts and regions are recorded.")
+    if policy == "allow":
+        limitations.append("Profile explicitly permits uninitialized reads; results depend on the pinned Ghidra runtime's handling. Direct executor fault counts and regions are recorded.")
+    if config.get("settings_acknowledgements"):
+        limitations.append("Settings are explicitly acknowledged by the private profile's initialization recipe; the generic backend does not automatically apply or prove their device semantics.")
     capture = capture_from_output(profile, trace, commands, output_path.read_text(), output_tags,
                                   state_tag_map=state_tags, execution_kind="original-firmware",
                                   backend="ghidra-pcode", limitations=limitations, request_id=request["request_id"])
@@ -286,7 +347,10 @@ def execute_request(request_path, capture_path):
             and isinstance(engine.get("language"), str) and engine["language"].startswith("Xtensa:"),
             "missing or incompatible emulator engine identity")
     require(len(capture["events"]) == capture["manifest"]["completion"]["stubs"], "boundary log is incomplete")
-    require(all(capture["manifest"]["capabilities"][key] for key in ("adc_log", "clock_log", "rng_log")), "Ghidra script did not declare boundary instrumentation")
+    hook_kinds = {hook["kind"] for hook in config["hooks"]}
+    expected_caps = {"adc_log": "adc" in hook_kinds,
+                     "clock_log": bool(hook_kinds & {"millis", "micros"}), "rng_log": "rng" in hook_kinds}
+    require(all(capture["manifest"]["capabilities"][key] == value for key, value in expected_caps.items()), "Ghidra instrumentation differs from configured hooks")
     for event in capture["events"]:
         if event["kind"] == "adc":
             require(event["frame"] >= 0, "ADC read before a frame input was supplied")
@@ -297,6 +361,15 @@ def execute_request(request_path, capture_path):
             require(event.get("units") in {"ms", "us"}, "clock event has unknown units")
             value = event["time_us"] // 1000 if event["units"] == "ms" else event["time_us"]
             require(event["value"] == value & U32, "observed clock return differs from frame clock")
+    read_counts = {kind: sum(event["kind"] == kind for event in capture["events"]) for kind in ("adc", "clock", "rng")}
+    frame_adc_reads = sum(event["kind"] == "adc" and event["frame"] >= 0 for event in capture["events"])
+    arguments_per_frame = sum(isinstance(arg, dict) and set(arg) == {"input"}
+                              for call in config["frame_calls"] for arg in call.get("arguments", []))
+    argument_values = arguments_per_frame * len(trace["frames"])
+    require(config.get("allow_unused_input", False) or frame_adc_reads + argument_values > 0,
+            "no frame observed ADC input or received an input argument; explicitly allow_unused_input for an input-independent routine")
+    if config.get("allow_unused_input", False):
+        capture["manifest"]["limitations"].append("Profile explicitly permits execution without delivering trace input to any frame boundary.")
     encoding = config.get("state_encoding", "bytes")
     if encoding == "sha256":
         for frame in capture["frames"]:
@@ -306,6 +379,14 @@ def execute_request(request_path, capture_path):
                                "adapter_provenance": {"implementation_sha256": fingerprints,
                                    "commands_sha256": file_digest(command_path), "output_sha256": file_digest(output_path),
                                    "adc_policy": config.get("adc_policy", "strict"),
+                                   "settings_acknowledgements": config.get("settings_acknowledgements", {}),
+                                   "read_counts": read_counts, "frame_adc_reads": frame_adc_reads,
+                                   "input_argument_values_supplied": argument_values,
+                                   "argument_observation_scope": "Supplied to completed routine calls; instruction-level use is not tracked.",
+                                   "allow_unused_input": config.get("allow_unused_input", False),
+                                   "execution_metadata": execution,
+                                   "headless_path": str(Path(executable).resolve()),
+                                   "runtime_isolation": "fresh per-run settings, compiled-script cache and temporary directories",
                                    "rng_seed_requested": trace["seed"], "rng_initial_state": trace["seed"] or 1,
                                    "uninitialized_read_warning_count": len(warnings),
                                    "unique_uninitialized_read_warnings": sorted(set(warnings))}})

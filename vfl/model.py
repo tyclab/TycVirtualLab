@@ -227,6 +227,13 @@ def validate_geometry(geometry, buses):
 def validate_profile(profile):
     from .identity import validate_target
     mapping(profile, "profile")
+    profile_keys = {"schema", "id", "description", "input", "buses", "backend", "settings",
+                    "geometry", "firmware", "target", "metadata"}
+    require(set(profile) <= profile_keys, "unknown profile keys: " + ", ".join(sorted(set(profile) - profile_keys)))
+    if "description" in profile:
+        require(isinstance(profile["description"], str), "profile.description must be a string")
+    if "metadata" in profile:
+        mapping(profile["metadata"], "profile.metadata")
     require(profile.get("schema") == "vfl.profile.v1", "unsupported profile schema")
     identifier(profile.get("id"), "profile.id")
     validate_target(profile.get("target"))
@@ -265,10 +272,19 @@ def validate_profile(profile):
         require(0 < backend.get("timeout_s", 300) <= 86400, "timeout must be in (0, 86400]")
     assets = profile.get("firmware", [])
     require(isinstance(assets, list), "firmware must be a list")
+    roles = set()
     for asset in assets:
         mapping(asset, "firmware asset")
+        asset_keys = {"role", "path", "sha256", "format", "description", "metadata"}
+        require(set(asset) <= asset_keys, "unknown firmware asset keys: " + ", ".join(sorted(set(asset) - asset_keys)))
         require(isinstance(asset.get("path"), str) and asset["path"], "asset.path required")
         identifier(asset.get("role"), "asset.role")
+        require(asset["role"] not in roles, "duplicate firmware asset role")
+        roles.add(asset["role"])
+        if "description" in asset:
+            require(isinstance(asset["description"], str), "asset.description must be a string")
+        if "metadata" in asset:
+            mapping(asset["metadata"], "asset.metadata")
         if "format" in asset:
             choice(asset["format"], {"esp32", "esp8266", "elf"}, "invalid asset.format")
         if "sha256" in asset:

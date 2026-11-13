@@ -27,10 +27,25 @@
             meta.mainProgram = "tycvl";
           };
         });
-      checks = eachSystem (system: { package = self.packages.${system}.default; });
+      checks = eachSystem (system:
+        let pkgs = import nixpkgs { inherit system; }; in {
+          package = self.packages.${system}.default;
+          ghidra = pkgs.runCommand "tycvirtuallab-ghidra-check" {
+            nativeBuildInputs = [ pkgs.python3 pkgs.ghidra ];
+          } ''
+            cp -R ${self} "$TMPDIR/source"
+            chmod -R u+w "$TMPDIR/source"
+            cd "$TMPDIR/source"
+            export TYCVL_GHIDRA_INTEGRATION=1
+            export GHIDRA_HEADLESS="${pkgs.ghidra}/bin/ghidra-analyzeHeadless"
+            export JAVA_TOOL_OPTIONS="-Dapplication.settingsdir=$TMPDIR/tycvl-settings -Dapplication.cachedir=$TMPDIR/tycvl-cache -Dapplication.tempdir=$TMPDIR/tycvl-temp"
+            python -m unittest discover -s tests -p test_ghidra.py -v
+            touch "$out"
+          '';
+        });
       devShells = eachSystem (system:
         let pkgs = import nixpkgs { inherit system; }; in {
-          default = pkgs.mkShell { packages = [ pkgs.python3 pkgs.python3Packages.setuptools pkgs.gnumake pkgs.gcc ]; };
+          default = pkgs.mkShell { packages = [ pkgs.python3 pkgs.python3Packages.setuptools pkgs.nodejs pkgs.gnumake pkgs.gcc ]; };
           emulation = pkgs.mkShell { packages = [ pkgs.python3 pkgs.gnumake pkgs.gcc pkgs.ghidra ]; };
         });
     };

@@ -246,6 +246,36 @@ class CoreTests(unittest.TestCase):
             with self.subTest(settings=settings), self.assertRaises(LabError):
                 validate_profile(bad)
 
+    def test_profile_and_asset_keys_are_closed_with_annotation_metadata(self):
+        bad = profile()
+        bad["setings"] = {}
+        with self.assertRaisesRegex(LabError, "unknown profile"):
+            validate_profile(bad)
+        bad = profile()
+        bad["firmware"] = [{"role": "fixture", "path": "fixture.bin", "sha265": "0" * 64}]
+        with self.assertRaisesRegex(LabError, "unknown firmware asset"):
+            validate_profile(bad)
+        good = profile()
+        good["metadata"] = {"note": "authored metadata is not execution settings"}
+        good["firmware"] = [{"role": "fixture", "path": "fixture.bin", "metadata": {"note": "test only"}}]
+        validate_profile(good)
+
+    def test_empty_common_event_kind_is_omitted_and_counts_are_per_kind(self):
+        left = identified_capture()
+        right = copy.deepcopy(left)
+        for item in (left, right):
+            item["events"] = [event for event in item["events"] if event["kind"] != "adc"]
+        result = compare(left, right, include_events=True)
+        self.assertEqual(result["verdict"], "equal")
+        self.assertEqual(result["scope"]["event_kinds"], ["clock", "rng"])
+        self.assertEqual(result["scope"]["omitted_empty_event_kinds"], ["adc"])
+        self.assertEqual(result["events_compared_by_kind"], {"clock": 4, "rng": 4})
+        self.assertEqual(result["event_counts"]["left"]["adc"], 0)
+        self.assertEqual(result["events_compared"], 8)
+        right["events"].insert(0, {"kind": "adc", "frame": 0, "channel": 0, "value": 1})
+        with self.assertRaisesRegex(LabError, "adc.*empty"):
+            compare(left, right, include_events=True)
+
     def test_huge_numbers_fail_with_contract_error(self):
         with self.assertRaises(LabError):
             number(10**400, "large input")

@@ -155,7 +155,15 @@ history. Nothing is uploaded or published by these commands.
 ```sh
 python3 -m unittest discover -s tests -v
 python3 -m compileall -q vfl
+nix flake check
 ```
+
+`nix flake check` runs the package tests, including Node-based viewer checks, and
+the pinned Ghidra integration check (`checks.<system>.ghidra`) with independently
+authored instruction fixtures. No vendor firmware is needed. Plain Python test
+discovery skips real Ghidra execution unless explicitly enabled; see
+[docs/ghidra.md](docs/ghidra.md). The default Nix development shell includes Node
+so viewer checks also run there.
 
 Tests use authored synthetic inputs, WAV data and tiny subprocess fixtures. They
 exercise spectral behavior, strict parsing, stateful execution, mismatches,

@@ -159,11 +159,11 @@ class RunnerTests(unittest.TestCase):
             self.run_fixture(suffix="oversized", profile=large)
         self.assertFalse((self.directory / "run-oversized").exists())
 
-    def _start_runner_with_child(self, label):
+    def _start_runner_with_child(self, label, mode="timeout-child", timeout_s=10):
         marker = self.directory / (label + "-survived")
-        profile = self.profile("timeout-child", marker)
+        profile = self.profile(mode, marker)
         lock = self.directory / (label + ".lock")
-        profile["backend"].update(resource_lock=str(lock), timeout_s=10)
+        profile["backend"].update(resource_lock=str(lock), timeout_s=timeout_s)
         profile_path = self.directory / (label + ".json")
         write_json(profile_path, profile)
         out = self.directory / (label + "-run")
@@ -180,6 +180,66 @@ class RunnerTests(unittest.TestCase):
                 self.fail("runner did not start fixture backend")
             time.sleep(0.01)
         return process, marker, lock, out, int(backend_pid_path.read_text())
+
+    def _await_nested_leaf(self, process, marker):
+        path = Path(str(marker) + ".leaf.pid")
+        deadline = time.monotonic() + 5
+        while not path.exists():
+            if time.monotonic() > deadline or process.poll() is not None:
+                self.fail("nested process did not start")
+            time.sleep(0.01)
+        return int(path.read_text())
+
+    def test_nested_groups_cleanup_on_outer_signal_and_timeout(self):
+        for cause in ("signal", "timeout"):
+            with self.subTest(cause=cause):
+                process, marker, lock, out, backend_pid = self._start_runner_with_child(
+                    "nested-" + cause, mode="nested", timeout_s=0.8 if cause == "timeout" else 10)
+                leaf_pid = None
+                try:
+                    leaf_pid = self._await_nested_leaf(process, marker)
+                    if cause == "signal":
+                        process.send_signal(signal.SIGTERM)
+                    _, error = process.communicate(timeout=5)
+                    self.assertEqual(process.returncode, 2, error)
+                    self.assertEqual(load_json(out / "status.json")["status"], "failed")
+                    time.sleep(1.3)  # Both nested generations ignore TERM; survivor would write.
+                    self.assertFalse(marker.exists(), "nested session survived outer termination")
+                    with lock.open("a+b") as fd:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    for pid in (leaf_pid, backend_pid):
+                        if pid is not None:
+                            try:
+                                os.killpg(pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate()
+
+    def test_nested_leaf_retains_resource_lock_after_both_runners_are_killed(self):
+        process, marker, lock, _, backend_pid = self._start_runner_with_child("nested-lock", mode="nested")
+        leaf_pid = None
+        try:
+            leaf_pid = self._await_nested_leaf(process, marker)
+            process.kill()
+            process.communicate(timeout=5)
+            os.killpg(backend_pid, signal.SIGKILL)
+            time.sleep(0.05)
+            with lock.open("a+b") as fd:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            for pid in (leaf_pid, backend_pid):
+                if pid is not None:
+                    try:
+                        os.killpg(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
 
     def test_termination_signals_cleanup_child_and_release_lock(self):
         for sig in (signal.SIGTERM, signal.SIGHUP):

@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import unittest
 
 from vfl.compare import compare
@@ -20,7 +21,8 @@ class StateHashTests(unittest.TestCase):
         self.hashed = copy.deepcopy(self.original)
         self.hashed["manifest"]["state_encoding"] = "sha256"
         for frame in self.hashed["frames"]:
-            frame["state"] = {name: digest(value) for name, value in frame["state"].items()}
+            frame["state"] = {name: hashlib.sha256(bytes.fromhex(value)).hexdigest()
+                              for name, value in frame["state"].items()}
 
     def test_hash_difference_does_not_claim_raw_byte_offset(self):
         altered = copy.deepcopy(self.hashed)

@@ -40,18 +40,35 @@ def compare(left, right, *, include_state=True, include_events=False):
         require(lm["capabilities"]["state"] and rm["capabilities"]["state"], "state comparison requested but unavailable; explicitly select RGB-only")
         require(lm.get("state_encoding", "bytes") == rm.get("state_encoding", "bytes"), "incomparable state encodings")
     event_kinds = []
+    omitted_empty_kinds = []
+    event_counts = {"left": {}, "right": {}}
     left_events, right_events = [], []
     if include_events:
-        event_kinds = [kind for kind in ("adc", "clock", "rng")
-                       if lm["capabilities"][kind + "_log"] and rm["capabilities"][kind + "_log"]]
-        require(event_kinds, "event comparison requested but no common log capabilities")
+        common = [kind for kind in ("adc", "clock", "rng")
+                  if lm["capabilities"][kind + "_log"] and rm["capabilities"][kind + "_log"]]
+        require(common, "event comparison requested but no common log capabilities")
+        for side, capture in (("left", left), ("right", right)):
+            event_counts[side] = {kind: 0 for kind in ("adc", "clock", "rng")}
+            for event in capture["events"]:
+                if event["kind"] in event_counts[side]:
+                    event_counts[side][event["kind"]] += 1
+        for kind in common:
+            a, b = event_counts["left"][kind], event_counts["right"][kind]
+            if a == b == 0:
+                omitted_empty_kinds.append(kind)
+                continue
+            require(a and b, f"cannot compare {kind} events: one common log is empty")
+            event_kinds.append(kind)
+        require(event_kinds, "event comparison requested but common event logs are empty")
         left_events, right_events = _normalized_events(left, event_kinds), _normalized_events(right, event_kinds)
         require(left_events and right_events, "event comparison requested but a common event log is empty")
     base = {"schema": "vfl.comparison.v1", "left_execution": lm["execution_kind"],
             "right_execution": rm["execution_kind"], "input_sha256": lm["input_sha256"],
             "left_capture_sha256": digest(left), "right_capture_sha256": digest(right),
-            "scope": {"rgb": True, "state": include_state, "events": include_events, "event_kinds": event_kinds},
-            "verification": "unverified", "frames_compared": 0, "events_compared": 0}
+            "scope": {"rgb": True, "state": include_state, "events": include_events, "event_kinds": event_kinds,
+                      "omitted_empty_event_kinds": omitted_empty_kinds},
+            "verification": "unverified", "frames_compared": 0, "events_compared": 0,
+            "event_counts": event_counts, "events_compared_by_kind": {kind: 0 for kind in event_kinds}}
 
     def different(reason, **detail):
         return dict(base, verdict="different", first_difference=dict(reason=reason, **detail))
@@ -89,6 +106,7 @@ def compare(left, right, *, include_state=True, include_events=False):
             if a != b:
                 return different("event", event_index=index)
             base["events_compared"] += 1
+            base["events_compared_by_kind"][a["kind"]] += 1
         if len(left_events) != len(right_events):
             return different("event", event_index=base["events_compared"])
     return dict(base, verdict="equal", first_difference=None,

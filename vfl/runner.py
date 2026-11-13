@@ -17,8 +17,29 @@ from pathlib import Path
 
 from . import __version__
 from .model import (MAX_JSON_BYTES, LabError, compatible_input, digest, experiment_digest, file_digest,
-                    load_json, private_path, require, validate_capture, validate_profile,
+                    load_json, number, private_path, require, validate_capture, validate_profile,
                     validate_trace, write_json)
+
+RESOURCE_LOCK_ENV = "TYCVL_RESOURCE_LOCK_FDS"
+
+
+def inherited_resource_lock_fds():
+    """Descriptors forwarded by a parent TycVirtualLab runner, never file paths."""
+    encoded = os.environ.get(RESOURCE_LOCK_ENV, "")
+    if not encoded:
+        return ()
+    require(len(encoded) <= 1024, "inherited resource-lock metadata exceeds limit")
+    parts = encoded.split(",")
+    require(len(parts) <= 64 and all(part.isascii() and part.isdigit() for part in parts),
+            "invalid inherited resource-lock descriptors")
+    descriptors = tuple(sorted({int(part) for part in parts}))
+    for fd in descriptors:
+        require(3 <= fd <= 1_048_576, "invalid inherited resource-lock descriptor")
+        try:
+            os.fstat(fd)
+        except OSError as exc:
+            raise LabError("inherited resource-lock descriptor is no longer open") from exc
+    return descriptors
 
 
 def resolve_profile(path):
@@ -124,12 +145,30 @@ def _leader_exited(pid):
     return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
 
 
-def run_process(command, cwd, stdout, stderr, timeout_s, env=None, output_limit=8*1024*1024, *, pass_fds=()):
-    """No shell; terminate the process group on timeout or excessive logs."""
+def run_process(command, cwd, stdout, stderr, timeout_s, env=None, output_limit=8*1024*1024,
+                *, pass_fds=(), resource_lock_fds=(), termination_grace_s=1.0):
+    """Manage one process group, forwarding resource locks through nested adapters.
+
+    Nested adapters use termination_grace_s=0 so an outer runner's grace cannot
+    expire while the inner runner is also waiting. SIGKILL still needs external
+    supervision; inherited locks prevent a surviving backend losing its lock.
+    """
+    number(termination_grace_s, "termination_grace_s")
+    require(0 <= termination_grace_s <= 60, "termination_grace_s must be in [0, 60]")
+    lock_fds = tuple(sorted(set(inherited_resource_lock_fds()) | set(resource_lock_fds)))
+    for fd in lock_fds:
+        require(type(fd) is int and fd >= 3, "invalid resource lock descriptor")
+        os.fstat(fd)
+    child_env = os.environ.copy() if env is None else dict(env)
+    if lock_fds:
+        child_env[RESOURCE_LOCK_ENV] = ",".join(map(str, lock_fds))
+    else:
+        child_env.pop(RESOURCE_LOCK_ENV, None)
+    forwarded_fds = tuple(sorted(set(pass_fds) | set(lock_fds)))
     started = time.monotonic()
     with _termination_handlers(), Path(stdout).open("xb") as out, Path(stderr).open("xb") as err:
-        p = subprocess.Popen(command, cwd=cwd, stdout=out, stderr=err, env=env,
-                             stdin=subprocess.DEVNULL, start_new_session=True, pass_fds=pass_fds)
+        p = subprocess.Popen(command, cwd=cwd, stdout=out, stderr=err, env=child_env,
+                             stdin=subprocess.DEVNULL, start_new_session=True, pass_fds=forwarded_fds)
         failure = None
         try:
             while not _leader_exited(p.pid):
@@ -150,7 +189,7 @@ def run_process(command, cwd, stdout, stderr, timeout_s, env=None, output_limit=
                 os.killpg(p.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            grace_end = time.monotonic() + 1
+            grace_end = time.monotonic() + termination_grace_s
             while not _leader_exited(p.pid) and time.monotonic() < grace_end:
                 time.sleep(0.01)
             try:
@@ -263,7 +302,7 @@ def run_capture(profile_path, trace_path, output_dir):
                 require(isinstance(extra_env, dict) and all(isinstance(k, str) and isinstance(v, str) and "\x00" not in k+v and "=" not in k for k,v in extra_env.items()), "invalid backend environment")
                 env.update(extra_env)
                 run_process(command, cwd, output / "stdout.log", output / "stderr.log", backend.get("timeout_s", 300), env,
-                            pass_fds=() if lock_fd is None else (lock_fd,))
+                            resource_lock_fds=() if lock_fd is None else (lock_fd,))
                 require(target.is_file() and not target.is_symlink(), "backend produced no regular capture file")
                 result = load_json(target)
         validate_capture(result, profile, trace)
