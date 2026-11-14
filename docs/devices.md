@@ -1,6 +1,6 @@
 # Device profiles and execution boundaries
 
-TycVirtualLab includes three runnable **synthetic demonstrations**. They test
+Alongside its executable device adapters, TycVirtualLab includes three runnable **synthetic demonstrations**. They test
 trace handling, state, pixel streams and viewing. They do not execute vendor
 firmware or reproduce any vendor effect. Every demo capture declares this in
 its manifest.
@@ -16,8 +16,8 @@ factory LED maps or calibrated wiring. Dimensions are arbitrary display units.
 Pixel counts, raster sizes and ring arrangements in this table are illustrative
 fixture choices, not statements about a manufacturer's internal layout.
 Mirror reflections, diffuser shape and optical brightness are not modeled.
-Firmware, recovered palettes, device addresses and measurements belong in an
-external private workspace.
+Firmware, recovered palettes and measurements remain external inputs. Reusable
+address maps and device setup are included in the shareable source.
 
 ## Adding geometry
 
@@ -40,28 +40,37 @@ reproduce its device's access behavior.
 LEDs exist. Logical-to-physical mapping, skipped indices, byte order, gamma,
 brightness and limiting are adapter responsibilities. Compare like stages.
 
-## Private device adapters
+Detailed workflows: [HyperCube](hypercube.md), [Exoy ONE](exoy.md), [GLORB](glorb.md),
+and [audio calibration](calibration.md).
 
-| Family | Private configuration needed | First execution boundary |
+## Executable device setup
+
+The public `vfl.devices` package contains reusable device maps and builders. The
+CLI exposes them through `device list`, `device effects`, `device prepare` and
+`device coverage`. Firmware and output files are supplied in external directories.
+
+| Device | Execution boundary | Captured output |
 | --- | --- | --- |
-| HyperCube | A compatible ELF/ROM, initialization recipe and verified function boundaries | Run original code with explicit clock, input, state and output regions; distinguish it from a recovered port |
-| Exoy ONE | An image loader, matching CPU/ABI model and verified input/output boundaries | Establish a small independently checked routine before claiming a complete renderer |
-| GLORB | Matching CPU/ABI support, input state and logical-to-physical pixel mapping | Identify the renderer's dependencies and preserve any masked pixel semantics during computation |
+| HyperCube hs-2.2 | Original static constructors, application setup, boot configuration, audio analysis and effect engine; SDK/peripheral boundaries declared | Two 144-pixel GRB driver buffers and firmware state |
+| Exoy ONE v2.1 | Original Xtensa windowed routines; supported selectors and runtime hooks declared by the profile | 480 RGB pixels and renderer state |
+| GLORB | Supplied recovered renderer compiled with the public WLED host boundary | 120 logical cells, a bus sized from factory configuration, segment state and actual processed-audio reads |
 
-An original-machine-code backend must support the actual instruction set and
-ABI. ESP8266 call0 code, classic ESP32 register-window code and ESP32-S3 code
-are separate execution targets. Merely parsing their image headers does not
-establish an executable reference. Each adapter declares supported inputs,
-clock/RNG/state logs, unsupported calls and limitations in its capture manifest.
+An adapter's inventory is not proof that every effect ran. Coverage reports keep
+requested selectors, executed entry points, nonblack frames, changes and failures
+separate. Original instruction execution and recovered C++ execution have distinct
+manifest labels. Neither label claims reset-ROM boot or a physical microphone.
 
-Recovered effects may depend on segment buffers, time, palette helpers and
-audio data. A usermod source file is therefore not necessarily a standalone host
-renderer. A host adapter must supply these dependencies explicitly. Captured liveview
-pixels also need a stage label: they may precede gamma and power limiting.
+GLORB uses externally supplied factory presets, palettes and mapping. It drops
+writes and returns black at holes during rendering, preserving feedback behavior.
+The capture has both logical and mapped pre-output stages. Audio input is the
+processed `volumeSmth` value, not raw PCM. Changes of effect reset segment state;
+changing a palette requires its actual table. Its host is an independent comparison
+target for original-machine-code captures, not a certificate of equivalence.
 
-A local control-protocol fixture can test serialization without opening a
-socket. The framework does not send packets or provision devices. An app's scene
-labels or command registry alone do not establish its rendering algorithms.
+Xtensa call0, classic ESP32 register windows and ESP32-S3 code remain distinct
+targets. The pinned Ghidra adapter includes regression fixtures for register-window
+rotation, locals, nested and indirect calls, and hardware loops. Missing instructions
+and undefined memory fail explicitly; any runtime substitutions are named and logged.
 
 ## Viewing evidence
 

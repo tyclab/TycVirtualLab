@@ -226,7 +226,7 @@ i=sys.argv.index('-postScript')
 script,commands,out,nonce,policy=sys.argv[i+1:]
 raw=Path(commands).read_bytes()
 binding={'schema':'tycvl.execution-binding.v1','request_id':nonce,'commands_sha256':hashlib.sha256(raw).hexdigest()}
-decl={'schema':'vfl.boundary-log.v1','adc_log':False,'clock_log':False,'rng_log':False,'engine':{'name':'ghidra-pcode','version':'fake-driver-test','language':'Xtensa:LE:32:default','abi':'xtensa-call0'}}
+decl={'schema':'vfl.boundary-log.v1','adc_log':False,'clock_log':False,'rng_log':False,'engine':{'name':'ghidra-pcode','version':'12.0.4','language':'Xtensa:LE:32:default','abi':'xtensa-call0'}}
 lines=['E binding '+json.dumps(binding),'E instrumentation '+json.dumps(decl)]
 frame=-1
 for line in raw.decode().splitlines():

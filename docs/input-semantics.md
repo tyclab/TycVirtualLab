@@ -1,11 +1,13 @@
 # Input and observation semantics
 
-Version 1 uses a **frozen frame clock**. A trace supplies frame indexes,
+The normal trace-driven Ghidra adapters use a **frozen frame clock**. A trace supplies frame indexes,
 monotonically increasing microsecond timestamps, values, and a deterministic seed.
 It does not claim that every supplied channel was read, nor that the firmware
 executed once per physical display refresh. Read logs record actual consumption.
 An advancing clock, asynchronous interrupt schedule and arbitrary read tape need a
 different explicit model; the v1 `events` clock policy is unsupported.
+The separate [Exoy board backend](board.md) uses an observed QEMU clock instead;
+its input packets apply in dispatcher order and do not set that clock.
 
 ## Boundary values
 
@@ -15,10 +17,19 @@ is reached. It resets the channel cursor at each frame and fails when a routine
 reads beyond that frame's supplied values. A frame may consume none or fewer than
 all values. This is a bounded input model, not a claim about a device's scan rate.
 An adapter that cycles inputs or models a multiplexer must declare that difference.
+The HyperCube device profile models the original GPIO reset and strobe sequence:
+those writes select the MSGEQ7 channel read by the actual ADC call. It fails on
+missing reset or invalid scan phase. It does not infer a new physical sample
+period from the timestamps.
 
 For `scalar`, values can describe explicitly identified function inputs. The
 public Ghidra call adapter supports unsigned integer arguments. A profile that
-needs floating-point conversion must provide that conversion explicitly.
+needs floating-point conversion must provide that conversion explicitly. GLORB's
+host and original adapters expose one binary32 `volumeSmth` input through the
+original audio-usermod interface. Exoy's default input is 64 chronological raw ADC
+counts; its original max-of-window and adaptive processing execute downstream.
+The `wav --mode exoy-adc` converter requires explicit gain and offset, retains
+sample order within each window and identifies its unmeasured physical cadence.
 
 For `pcm`, blocks contain normalized mono samples in sample order, and their
 timestamps derive from the sample rate. Only the final block may be shorter than
@@ -76,6 +87,10 @@ gain, offset and clipping. Its transfer function and timing are not calibrated t
 a particular microphone board. Firmware AGC and beat processing remain downstream
 of ADC injection; duplicating them in the input model would test the wrong system.
 Physical calibration data belongs in a private model configuration and provenance.
+The [measured path adapter](calibration.md) offers an alternative response fitted
+to private tone observations, with per-frame warmup, spectral-range and amplitude
+diagnostics. Neither model identifies the original analog circuit from firmware
+alone.
 
 ## Future extensions
 

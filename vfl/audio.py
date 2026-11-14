@@ -108,12 +108,73 @@ class PCM:
         object.__setattr__(self, "provenance", _metadata(self.provenance))
 
 
+class _WAVSamples:
+    """Immutable encoded samples with bounded decoding at slice boundaries."""
+
+    def __init__(self, raw, width, channels, channel, count):
+        self._raw, self._width, self._channels = raw, width, channels
+        self._channel, self._count = channel, count
+
+    def __len__(self):
+        return self._count
+
+    def __getitem__(self, item):
+        if isinstance(item, slice):
+            start, end, step = item.indices(self._count)
+            if step != 1:
+                raise ValueError("WAV samples support contiguous slices only")
+            return tuple(self._sample(i) for i in range(start, end))
+        _integer(item, "sample index", 0, self._count - 1)
+        return self._sample(item)
+
+    def _sample(self, index):
+        width = self._width
+        start = index * self._channels * width
+        selected = range(self._channels) if self._channel == "mean" else (self._channel,)
+        total = count = 0
+        for channel in selected:
+            offset = start + channel * width
+            word = self._raw[offset:offset + width]
+            total += word[0] - 128 if width == 1 else int.from_bytes(word, "little", signed=True)
+            count += 1
+        return total / (count * float(1 << (8 * width - 1)))
+
+
+@dataclass(frozen=True)
+class WAVStream:
+    """Validated WAV bytes decoded as requested, without an entire float array.
+
+    The encoded file is retained as an immutable snapshot (at most 128 MiB).
+    This avoids source changes during a long run and supports full recordings
+    exceeding the in-memory PCM sample limit, without truncation or resampling.
+    """
+
+    sample_rate_hz: int
+    samples: _WAVSamples
+    provenance: dict
+
+    def __post_init__(self):
+        _integer(self.sample_rate_hz, "sample_rate_hz", 1, 384000)
+        if not isinstance(self.samples, _WAVSamples):
+            raise ValueError("WAVStream requires validated encoded samples")
+        object.__setattr__(self, "provenance", _metadata(self.provenance))
+
+
 def read_wav(path, channel="mean"):
     """Read integer PCM WAV (8/16/24/32-bit), selecting or averaging channels.
 
     Integer full scale is normalized by 2**(bits-1); 8-bit WAV is unsigned.
     No resampling, automatic gain, or normalization to the loudest sample occurs.
     """
+    return _read_wav(path, channel, stream=False)
+
+
+def read_wav_stream(path, channel="mean"):
+    """Read a full bounded WAV into an encoded snapshot with lazy sample slices."""
+    return _read_wav(path, channel, stream=True)
+
+
+def _read_wav(path, channel, *, stream):
     source = Path(path)
     if source.stat().st_size > MAX_WAV_BYTES:
         raise ValueError("WAV exceeds size limit")
@@ -132,7 +193,8 @@ def read_wav(path, channel="mean"):
             count = wav.getnframes()
             if wav.getcomptype() != "NONE" or width not in (1, 2, 3, 4):
                 raise ValueError("only 8/16/24/32-bit integer PCM WAV is supported")
-            if not 1 <= channels <= 64 or not 1 <= count <= MAX_PCM_SAMPLES:
+            sample_limit = MAX_WAV_BYTES if stream else MAX_PCM_SAMPLES
+            if not 1 <= channels <= 64 or not 1 <= count <= sample_limit:
                 raise ValueError("unsupported WAV channel or sample count")
             if channel != "mean":
                 _integer(channel, "channel", 0, channels - 1)
@@ -141,22 +203,17 @@ def read_wav(path, channel="mean"):
                 raise ValueError("truncated or misaligned WAV sample data")
     except (wave.Error, EOFError) as exc:
         raise ValueError(f"unsupported or malformed WAV: {exc}") from exc
-    scale = float(1 << (width * 8 - 1))
-    samples = []
-    for start in range(0, len(raw), channels * width):
-        selected = range(channels) if channel == "mean" else (channel,)
-        values = []
-        for c in selected:
-            word = raw[start + c * width:start + (c + 1) * width]
-            n = word[0] - 128 if width == 1 else int.from_bytes(word, "little", signed=True)
-            values.append(n / scale)
-        samples.append(sum(values) / len(values))
-    return PCM(rate, tuple(samples), {
+    provenance = {
         "kind": "wav", "sha256": hashlib.sha256(data).hexdigest(),
         "encoding": f"pcm_{'u' if width == 1 else 's'}{width * 8}le",
         "source_channels": channels, "channel_policy": channel,
         "source_frames": count, "normalization": "integer-full-scale",
-    })
+    }
+    samples = _WAVSamples(raw, width, channels, channel, count)
+    if stream:
+        provenance["decoding"] = "immutable-encoded-snapshot-with-lazy-sample-slices"
+        return WAVStream(rate, samples, provenance)
+    return PCM(rate, samples[:], provenance)
 
 
 def synthesize(kind="sine", *, duration_us=1_000_000, sample_rate_hz=48_000,
@@ -317,10 +374,12 @@ def pcm_to_trace(pcm, block_samples=480, *, seed=1):
     channels is the audio channel count (one), not the number of block samples.
     The final block may be shorter. Sample clock offsets use integer floor.
     """
-    if not isinstance(pcm, PCM):
-        raise ValueError("pcm must be a PCM object")
+    if not isinstance(pcm, (PCM, WAVStream)):
+        raise ValueError("pcm must be a PCM or WAVStream object")
     _integer(seed, "seed", 0, 2**32 - 1)
     _integer(block_samples, "block_samples", 1, 65_536)
+    if len(pcm.samples) > MAX_PCM_SAMPLES:
+        raise ValueError("PCM trace exceeds total sample limit; use a shorter window or band conversion")
     count = (len(pcm.samples) + block_samples - 1) // block_samples
     if count > MAX_TRACE_FRAMES:
         raise ValueError("PCM trace exceeds frame limit")
@@ -334,6 +393,60 @@ def pcm_to_trace(pcm, block_samples=480, *, seed=1):
                    "timestamp_semantics": "first sample in block; floor(sample_index * 1000000 / sample_rate_hz)"}, frames)
 
 
+def pcm_to_adc_trace(pcm, *, gain, offset, samples_per_frame=64, maximum=4095,
+                     units="adc-counts", frame_us=None, seed=1, tail="reject"):
+    """Select chronological PCM windows and explicitly quantize them to ADC reads.
+
+    Frames start at the supplied cadence, or at consecutive window boundaries.
+    Intra-window spacing is the source PCM spacing, not measured hardware timing.
+    """
+    if not isinstance(pcm, (PCM, WAVStream)):
+        raise ValueError("pcm must be a PCM or WAVStream object")
+    gain = _number(gain, "gain", 0, 1e9)
+    offset = _number(offset, "offset", -1e9, 1e9)
+    _integer(samples_per_frame, "samples_per_frame", 1, 256)
+    _integer(maximum, "maximum", 1, 65535)
+    if not isinstance(units, str) or not units or len(units) > 128:
+        raise ValueError("ADC units must be a nonempty string of at most 128 characters")
+    if tail not in {"reject", "pad-silence"}:
+        raise ValueError("tail must be reject or pad-silence")
+    if frame_us is not None:
+        _integer(frame_us, "frame_us", 1, 2**32)
+        if frame_us * pcm.sample_rate_hz < samples_per_frame * 1_000_000:
+            raise ValueError("ADC frame windows must not overlap")
+        count = (len(pcm.samples) * 1_000_000 + frame_us * pcm.sample_rate_hz - 1) // (frame_us * pcm.sample_rate_hz)
+    else:
+        count = (len(pcm.samples) + samples_per_frame - 1) // samples_per_frame
+    if not 1 <= count <= MAX_TRACE_FRAMES:
+        raise ValueError("ADC trace exceeds frame limit or has no samples")
+    if count * samples_per_frame > MAX_PCM_SAMPLES:
+        raise ValueError("ADC trace exceeds total value limit")
+    frames, clipped, padded = [], 0, 0
+    for i in range(count):
+        time = i * frame_us if frame_us is not None else i * samples_per_frame * 1_000_000 // pcm.sample_rate_hz
+        start = time * pcm.sample_rate_hz // 1_000_000 if frame_us is not None else i * samples_per_frame
+        samples = list(pcm.samples[start:start + samples_per_frame])
+        missing = samples_per_frame - len(samples)
+        if missing:
+            if tail == "reject":
+                raise ValueError("incomplete ADC window; explicitly select pad-silence or trim the input")
+            samples.extend([0.0] * missing)
+            padded += missing
+        raw = [offset + gain * value for value in samples]
+        clipped += sum(value < 0 or value > maximum for value in raw)
+        frames.append({"index": i, "time_us": time, "controls": {},
+                       "values": [int(math.floor(max(0, min(maximum, value)) + .5)) for value in raw]})
+    return _trace({"kind": "scalar", "channels": samples_per_frame, "minimum": 0,
+                   "maximum": maximum, "units": units}, seed,
+                  {"kind": "pcm-adc-windows", "source": _metadata(pcm.provenance),
+                   "gain_counts_per_normalized_sample": gain, "offset_counts": offset,
+                   "sample_rate_hz": pcm.sample_rate_hz, "frame_us": frame_us,
+                   "selection": "consecutive source samples at each frame start; gaps between windows are omitted",
+                   "quantization": "nearest-half-up-after-clamping", "clipped_values": clipped,
+                   "tail_policy": tail, "padded_samples": padded,
+                   "fidelity": "caller-supplied ADC transfer and PCM spacing; not measured acquisition timing"}, frames)
+
+
 def to_bands_trace(pcm, frame_times_us, *, seed=1, **model_options):
     """Read approximate band peaks at strictly increasing integer timestamps.
 
@@ -341,8 +454,8 @@ def to_bands_trace(pcm, frame_times_us, *, seed=1, **model_options):
     Time starts at zero; input beyond the supplied PCM is rejected, not padded.
     Each timestamp represents a real scan; skipped scans must be omitted.
     """
-    if not isinstance(pcm, PCM):
-        raise ValueError("pcm must be a PCM object")
+    if not isinstance(pcm, (PCM, WAVStream)):
+        raise ValueError("pcm must be a PCM or WAVStream object")
     _integer(seed, "seed", 0, 2**32 - 1)
     try:
         frame_times_us = iter(frame_times_us)
@@ -366,7 +479,8 @@ def to_bands_trace(pcm, frame_times_us, *, seed=1, **model_options):
     position = 0
     for i, t in enumerate(times):
         end = min(len(pcm.samples), t * pcm.sample_rate_hz // 1_000_000)
-        model.feed(pcm.samples[position:end])
+        for start in range(position, end, 65_536):
+            model.feed(pcm.samples[start:min(end, start + 65_536)])
         position = end
         frames.append({"index": i, "time_us": t, "values": list(model.read_adc()), "controls": {}})
     return _trace({"kind": "bands", "channels": 7, "minimum": 0,

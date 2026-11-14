@@ -203,7 +203,9 @@ def run_process(command, cwd, stdout, stderr, timeout_s, env=None, output_limit=
 
 
 def _source_fingerprint():
-    return digest({p.name: file_digest(p) for p in sorted(Path(__file__).parent.glob("*.py"))})
+    root = Path(__file__).parent
+    return digest({str(p.relative_to(root)): file_digest(p) for p in sorted(root.rglob("*"))
+                   if p.is_file() and p.suffix in {".py", ".java", ".cpp", ".h", ".c", ".ld"}})
 
 
 def load_completed_capture(path):
@@ -220,6 +222,9 @@ def load_completed_capture(path):
     capture = validate_capture(load_json(candidate))
     require(status.get("capture_sha256") == digest(capture), "completed capture hash mismatch")
     request = load_json(directory / "request.json")
+    if isinstance(request, dict) and request.get("schema") == "tycvl.board.request.v1":
+        from .board import verify_completed
+        return verify_completed(directory, request, status, capture)
     require(isinstance(request, dict) and request.get("schema") == "vfl.request.v1", "invalid run request")
     profile = validate_profile(request.get("profile"))
     trace = validate_trace(request.get("trace"))

@@ -6,6 +6,9 @@ import sys
 import tempfile
 import unittest
 import wave
+from unittest.mock import patch
+import contextlib
+import io
 
 from vfl.model import load_json, validate_trace, write_json
 
@@ -67,6 +70,51 @@ class CliTests(unittest.TestCase):
         for profile in profiles:
             result = self.cli("run", profile["id"], trace, "--out", self.directory / profile["id"])
             self.assertEqual(json.loads(result.stdout)["execution_kind"], "synthetic")
+
+    def test_coverage_case_failure_has_nonzero_cli_exit(self):
+        from vfl.cli import main
+        arguments=['device','coverage','hypercube','--elf','unused','--rom','unused','--out','unused']
+        for failed in (0,1):
+            output=io.StringIO()
+            with patch('vfl.device_cli.execute',return_value={'failed':failed}),contextlib.redirect_stdout(output):
+                self.assertEqual(main(arguments),1 if failed else 0)
+            self.assertEqual(json.loads(output.getvalue())['failed'],failed)
+
+    def test_device_inventory_and_measured_audio_cli(self):
+        devices=json.loads(self.cli("device", "list").stdout)
+        self.assertIn("hypercube", [d["id"] for d in devices])
+        effects=json.loads(self.cli("device", "effects", "hypercube").stdout)
+        self.assertGreater(len(effects), 90)
+        self.cli("generate", "--profile", "hypercube-demo", "--frames", 2,
+                 "--out", self.directory/"profile-input.json")
+        self.cli("generate", "--profile", "hypercube-demo", "--channels", 1,
+                 "--out", self.directory/"bad-profile-input.json", expected=2)
+        observed=self.directory/"observations.json"
+        write_json(observed, {"schema":"vfl.tone-observations.v1","baseline":[100],"input_peak":.25,"observations":[
+            {"frequency_hz":100,"values":[600]}, {"frequency_hz":10000,"values":[600]}]})
+        calibration=self.directory/"calibration.json"
+        self.cli("calibration", "fit", observed, "--out", calibration)
+        self.cli("tone", "--calibration", calibration, "--out", self.directory/"missing-scale.json", expected=2)
+        self.cli("tone", "--seconds", .05, "--calibration", calibration, "--adc-full-scale-mv", 1000,
+                 "--allow-out-of-range", "--out", self.directory/"measured.json")
+        trace=load_json(self.directory/"measured.json")
+        self.assertEqual(trace["input"]["channels"], 1)
+        self.assertEqual(trace["provenance"]["adc"]["full_scale_mv"], 1000)
+        self.cli("tone", "--seconds", .03, "--calibration", calibration, "--adc-full-scale-mv", 1000,
+                 "--adc-maximum", 4095, "--window-size", 512, "--decay-per-read", 0,
+                 "--energy-tolerance", .1, "--calibration-provenance", "embedded",
+                 "--out", self.directory/"configured.json")
+        configured=load_json(self.directory/"configured.json")
+        self.assertEqual(configured["input"]["maximum"],4095)
+        self.assertEqual(configured["provenance"]["model"]["window_size"],512)
+        self.assertEqual(configured["provenance"]["model"]["decay_per_read"],0)
+        self.assertIn("profile",configured["provenance"]["model"])
+        self.cli("tone","--window-size",512,"--out",self.directory/"bad-model.json",expected=2)
+        self.cli("tone", "--seconds", .048, "--mode", "exoy-adc", "--adc-gain", 2047,
+                 "--adc-offset", 2048, "--out", self.directory/"adc.json")
+        adc=load_json(self.directory/"adc.json")
+        self.assertEqual(adc["input"]["units"], "esp32-adc-chronological-read-counts")
+        self.assertEqual([len(f["values"]) for f in adc["frames"]], [64]*3)
 
     def test_tone_band_selectivity_and_pcm_block_integration(self):
         bands = self.directory / "tone-bands.json"

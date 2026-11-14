@@ -126,7 +126,16 @@ def _expected(commands_text, dialect):
         elif op == "adc_policy":
             if len(parts) != 2 or parts[1] not in {"strict", "cycle"}:
                 raise HsemuError("invalid ADC policy command")
-        elif op in {"w8", "w16", "w32", "stub", "zero"}:
+        elif op == "adc_scan":
+            if len(parts) != 5 or parts[4] not in {"falling", "rising"}:
+                raise HsemuError("invalid ADC scan command")
+            for value in parts[1:4]:
+                _number(value)
+        elif op == "observe":
+            if len(parts) != 3 or not re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", parts[2]):
+                raise HsemuError("invalid instruction observer command")
+            _number(parts[1])
+        elif op in {"w8", "w16", "w32", "stub", "zero", "heap"}:
             if len(parts) != 3:
                 raise HsemuError(f"invalid {op} command")
             for value in parts[1:]:
@@ -154,17 +163,21 @@ def _expected(commands_text, dialect):
             if len(parts) != 3 or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", parts[1]):
                 raise HsemuError("invalid register command")
             _number(parts[2])
-        elif op == "abi":
+        elif op in {"abi", "abi_windowed"}:
             if len(parts) != 8:
                 raise HsemuError("invalid ABI command")
             for value in parts[-2:]:
                 _number(value)
+        elif op == "hook_tail":
+            if len(parts) != 3 or parts[2] != "entered":
+                raise HsemuError("invalid windowed hook tail policy")
+            _number(parts[1])
         elif op == "hook":
             if len(parts) < 3:
                 raise HsemuError("invalid hook command")
             _number(parts[1])
             kind, args = parts[2], parts[3:]
-            if kind in {"millis", "micros", "adc", "noop", "guard_acquire", "guard_release"}:
+            if kind in {"millis", "micros", "adc", "noop", "guard_acquire", "guard_release", "f32_div", "gpio", "malloc", "free", "calloc", "realloc"}:
                 valid = not args
             elif kind == "rng":
                 valid = not args or args in (["raw"], ["bounded"])

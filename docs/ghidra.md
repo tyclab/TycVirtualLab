@@ -1,16 +1,17 @@
 # Original instruction execution with Ghidra
 
 The public backend runs an externally supplied ELF in Ghidra's p-code emulator.
-It supports explicitly configured **Xtensa call0 routines**, including repeated
-engine calls. It does not boot a complete ESP board. ESP32/ESP32-S3 windowed calls,
-interrupts, networking and unconfigured peripheral behavior are unsupported.
-Encountered windowed instructions and unknown p-code operations fail the run.
+It supports explicitly configured **Xtensa call0 or logical windowed routines**,
+including repeated engine calls. It does not boot a complete ESP board.
+Interrupts, networking and unconfigured peripheral behavior are unsupported.
+Physical register-window spilling, window-management instructions and mixing
+call0 routines into a windowed invocation fail explicitly.
 This backend and its direct memory-read checks are tested with **Ghidra 12.0.4**.
-Other Ghidra versions are not validated by this release; the running version and
-language remain recorded with each capture.
+Other Ghidra versions are rejected; the running version and language remain recorded with each capture.
 
-Keep images, ROMs, addresses, initialization recipes and results outside the
-source checkout. No device profile or vendor instruction bytes are bundled.
+Keep images, ROMs, private state and results outside the source checkout.
+Reusable device address metadata and setup recipes are bundled; vendor
+instruction bytes and palettes are not.
 `tests/test_ghidra.py` generates a newly authored five-instruction ELF whose
 independently known outputs test the execution pipeline.
 
@@ -56,7 +57,8 @@ Declare the ELF in `profile.firmware` with `role: "program"`, `format: "elf"`,
 its local path, and preferably a pinned `sha256`. The runner resolves asset paths
 relative to the private profile. Additional ROM/helper binaries use separate
 roles. The backend verifies a 32-bit little-endian Xtensa ELF before selecting
-the processor. `profile.target.abi` must explicitly be `xtensa-call0`; declare the
+the processor. `profile.target.abi` must match the configured `xtensa-call0` or
+`xtensa-windowed` ABI; declare the
 appropriate `chip` and `isa` alongside it. ELF metadata alone does not establish
 the Xtensa core or ABI.
 
@@ -88,9 +90,17 @@ the result. `tycvl compare PRIVATE_RUN_A PRIVATE_RUN_B` compares completed runs.
   initialization decision, not an automatically inferred BSS range.
 - Optional `binary_mappings` entries contain `role`, `address`, and optional
   `offset`/`length`. They copy bytes from declared assets after zeroing.
-- The ABI uses PC, a1 stack, a0 return address, a2–a7 arguments and a2 result.
-  a0–a15 and PS start at zero. Each call sets the configured stack and return
-  sentinel; other register/memory state carries between calls.
+- Call0 uses PC, a1 stack, a0 return address, a2–a7 arguments and a2 result.
+  Windowed entry presents the same callee registers by establishing a CALL8
+  boundary: arguments begin in caller a10 and the encoded link in a8. Entry
+  and sentinel must share a 1 GiB address region. Nested CALL4/8/12 and CALLX
+  calls use bounded logical register snapshots, including overlapping CALL4
+  return values. Maximum logical depth is 256; physical spill exceptions are
+  excluded. a0–a15 and PS start at zero. Each top-level call sets the configured
+  stack and return sentinel; other register/memory state carries between calls.
+- Windowed mode explicitly handles LOOP/LOOPNEZ/LOOPGTZ at LEND. This avoids
+  relying on Ghidra 12.0.4's static disassembly loop context during dynamic
+  execution. Authored tests exercise six iterations and a skipped zero loop.
 - `initialization` is an ordered list of `{"op":"call","address":...,"arguments":[...]}`,
   `{"op":"write","address":...,"hex":"..."}` and
   `{"op":"register","name":"a2","value":...}` operations.
@@ -127,11 +137,27 @@ Each hook has an external `address` and a `kind`:
 | `write` | Write `value` to `target`, with `width` of 1, 2 or 4 bytes; preserve a2. |
 | `guard_acquire` | Return whether the byte at the a2 argument address is zero. |
 | `guard_release` | Write one to that byte and preserve a2. |
+| `f32_div` | Interpret two argument bit patterns as finite IEEE754 binary32 operands and return Java float division bits. Reject zero denominator, nonfinite inputs and overflow. No floating-point exception flags are modeled. |
+
+Windowed hooks normalize the caller argument/result registers and encoded return
+link before the callee ENTRY executes. Each substituted call is logged. The
+`f32_div` hook is a declared runtime replacement; its use does not establish
+instruction-by-instruction equivalence of an unsupported firmware FP helper.
+Java's operation is specified in the [Java language specification](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.17.2).
 
 Only integer scalar/band traces and `clock_policy: "frame"` are supported.
 Timestamps must align to whole milliseconds, but intervals may vary. Time stays
 frozen throughout each frame's calls. Delays advance time only if explicitly
-modeled by another backend. Per-frame controls are rejected.
+modeled by another backend. Per-frame controls require a matching
+`frame_operations` recipe: each entry has `index`, the exact nonempty `controls`
+object, and ordered initialization-format `operations`. The device adapter owns
+the setting-to-memory mapping; the generic engine rejects unacknowledged controls.
+
+Optional `input_writes` bindings contain `channel`, `address`, and byte `width`
+(1, 2 or 4). After setting the frame clock, the driver writes that trace value to
+the declared address before calling the firmware. This supports traced internal
+DSP boundaries; it does not claim the firmware read the supplied value. Values
+that exceed the write width fail preflight.
 
 The default `adc_policy: "strict"` fails if reads exhaust the frame's input
 queue; unconsumed values are allowed. Explicit `adc_policy: "cycle"` revisits
@@ -139,11 +165,12 @@ channel zero after the last supplied value. Events and provenance record this
 policy. It models held channel values, not a device scan rate.
 
 By default, a completed run must contain at least one observed frame ADC read or
-one trace value supplied through an `{"input": channel}` call argument. The
+one trace value supplied through an `{"input": channel}` call argument or
+`input_writes` binding. The
 check spans the whole run; it does not require every channel or every frame to
 be consumed. Input-independent routines require explicit `allow_unused_input:
 true`, recorded as a limitation. Provenance distinguishes observed ADC reads from
-argument values supplied to completed calls: instruction-level use of an argument
+argument values and memory values supplied: instruction-level use of an input
 is not tracked. ADC, clock and RNG capabilities derive from configured hooks,
 and observed read counts are reported separately.
 
@@ -199,9 +226,74 @@ The nested process inherits resource-lock descriptors. On termination or timeout
 the adapter kills the Ghidra process group without an additional grace period,
 so it does not compete with the outer runner's cleanup deadline.
 
-Fast tests run with `python3 -m unittest tests.test_ghidra tests.test_hsemu`.
+The windowed calling convention follows Espressif's
+[Xtensa ISA overview](https://dl.espressif.com/github_assets/espressif/xtensa-isa-doc/releases/download/latest/Xtensa.pdf).
+The authored fixtures found and cover Ghidra 12.0.4's overlapping CALL4 register
+copy and missing dynamic LOOP repetition; the adapter supplies explicit handling.
+
+Fast tests run with `python3 -m unittest tests.test_ghidra tests.test_ghidra_windowed tests.test_ghidra_reviewed tests.test_hsemu`.
 For the real, independently authored ELF test, set `TYCVL_GHIDRA_INTEGRATION=1`
 and `GHIDRA_HEADLESS`; optionally set `TYCVL_GHIDRA_LAUNCHER` to the host limiter.
 All generated images and captures are temporary/private artifacts.
 `nix flake check` includes the pinned Ghidra integration check as well as the
 package tests; ordinary Python test discovery leaves real Ghidra tests opt-in.
+
+
+An optional `heap: {"address": ..., "size": ...}` declares an isolated runtime
+allocation arena, at most 1 MiB and aligned to 16 bytes. It must not overlap ELF,
+zero-initialized regions or binary mappings. Explicit `malloc`, `calloc`,
+`realloc` and `free` hooks implement deterministic first-fit allocation and
+coalescing. Zero-size allocation returns null; failed realloc preserves the old
+allocation. Calloc clears its result and checks product overflow. Guest reads
+and writes that overlap the arena must fit one live allocation's requested size;
+invalid/double frees fail. Fresh malloc bytes remain uninitialized under the
+existing strict-read policy; reused blocks retain unspecified prior bytes. This
+is a named runtime substitute, not the original SDK allocation algorithm.
+
+`input_writes` may declare `"encoding": "float32-le"` with `"width": 4` for
+finite scalar input. Values round to binary32 and are stored as little-endian
+bits. Their unused frame tape carries the same bits; ADC hooks are prohibited
+for these profiles so the bits cannot masquerade as ADC measurements. Ordinary
+input writes retain the default `uint-le` encoding. Dynamic call arguments
+remain unsigned integers. Exact control-acknowledgement recipes may contain an
+empty operations list when a supplied control repeats the existing value.
+
+## Instruction edge semantics
+
+Windowed hardware loops repeat only after an instruction falls through to LEND
+with nonzero LCOUNT. A taken branch to LEND does not repeat; an untaken branch
+does. Loop registers persist as architectural state, without an invented active
+flag. Windowed RSR/WSR are implemented only for LBEG/LEND/LCOUNT, including compiler-generated long-loop relocation; other special-register accesses fail. Their actual read/write counts are recorded in execution metadata. The authored edge fixtures check branch-to-end, conditional fallthrough
+and LOOPNEZ zero-trip behavior. Call0 hardware-loop instructions are explicitly
+rejected; the supported LX106 device does not implement them. This behavior follows
+the [QEMU Xtensa loop and conditional-branch implementation](https://github.com/qemu/qemu/blob/master/target/xtensa/translate.c).
+
+Ghidra12.0.4 defines PS_CALLINC at PS bits12–13 in xtensaArch.sinc, unlike the
+hardware PS bits16–17. The harness uses a named constant for the SLEIGH layout;
+a test checks the installed SLEIGH definition, and executed windowed calls verify it operationally. Privileged RSR.PS remains unsupported. This register model is not
+a claim to emulate arbitrary privileged PS manipulation.
+
+A normal CALL4/8/12 to a hook uses its call-site register window. A hook reached
+without CALLn fails by default. An inspected entered-frame tail jump can opt in
+per hook with `"windowed_tail": "entered"`; that profile asserts ENTRY already
+ran and the hook returns by restoring that frame. A no-ENTRY thunk must not use
+this policy. The authored tests cover both an opted-in entered tail and rejection
+of an unacknowledged no-ENTRY thunk.
+
+MADD.S/MSUB.S are fused operations, but the pinned SLEIGH emits two rounded
+p-code operations. The adapter corrects their destination with Java `Math.fma`
+for finite operands and results under default nearest-even FCR. Non-finite values,
+other FCR modes and floating-point status reads fail. Execution metadata counts
+corrected instructions; no floating-point exception flags are claimed. Authored
+fixtures distinguish fused ±2^-46 residuals from the incorrect unfused zero.
+
+
+The pinned Ghidra engine corrects `MADD.S`/`MSUB.S` to one final binary32 rounding
+using Java's fused operation. The [Cadence Xtensa ISA summary](https://www.cadence.com/content/dam/cadence-www/global/en_US/documents/tools/silicon-solutions/compute-ip/isa-summary.pdf)
+specifies no intermediate product rounding; the installed SLEIGH definition
+otherwise emits separate multiply and add/subtract operations. Only finite
+operands/results and default nearest-even FCR mode are supported; other cases
+fail. Floating-point exception/status flags are not modeled. Execution metadata
+records the policy and number of corrected fused instructions. An authored
+fixture distinguishes the exact ±2⁻⁴⁶ residual from the incorrect zero produced
+by two binary32 rounds.

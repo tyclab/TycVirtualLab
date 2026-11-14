@@ -11,7 +11,7 @@ from .model import LabError, canonical, file_digest, load_json, private_path, re
 
 MANIFEST = "source-manifest.json"
 ROOT_FILES = {"README.md", "LICENSE", "pyproject.toml", "flake.nix", "flake.lock", ".gitignore", "Makefile", MANIFEST}
-TEXT_EXTENSIONS = {".py", ".md", ".js", ".html", ".css", ".toml", ".nix", ".json", ".yml", ".yaml", ".java"}
+TEXT_EXTENSIONS = {".py", ".md", ".js", ".html", ".css", ".toml", ".nix", ".json", ".yml", ".yaml", ".java", ".h", ".cpp", ".c", ".ld"}
 PRIVATE_PATTERNS = [
     re.compile(r"/home/[A-Za-z0-9_.-]+/"),
     re.compile(r"/mnt/[a-z]/Users/", re.I),
@@ -67,7 +67,15 @@ def source_files(root):
                 errors.append(f"invalid source JSON: {relative}: {exc}")
                 continue
             schema = data.get("schema") if isinstance(data, dict) else None
-            if isinstance(schema, str) and schema in {"vfl.capture.v1", "vfl.trace.v1", "vfl.comparison.v1", "vfl.request.v1"}:
+            private_schemas = {"vfl.capture.v1", "vfl.trace.v1", "vfl.comparison.v1", "vfl.request.v1",
+                               "vfl.tone-calibration.v1", "vfl.tone-observations.v1", "tycvl.native-build.v1",
+                               "tycvl.device-coverage.v1", "vfl.device-coverage.v1"}
+            raw_observations = (isinstance(data, list) and data and all(isinstance(row, dict)
+                                and {"frequency_hz", "values"} <= set(row) for row in data))
+            raw_fit = isinstance(data, dict) and ( {"observations", "baseline", "input_peak"} <= set(data)
+                       or {"knots", "baseline", "input_peak"} <= set(data))
+            if ((isinstance(schema, str) and (schema in private_schemas or schema.startswith("tycvl.board.")))
+                    or raw_observations or raw_fit):
                 errors.append(f"experiment data is not source: {relative}")
                 continue
             if parts[0] == "vfl" and len(parts) > 1 and parts[1] == "profiles":

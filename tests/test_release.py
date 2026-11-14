@@ -80,6 +80,16 @@ class ReleaseTests(unittest.TestCase):
         self.assertFalse(report["clean"])
         self.assertFalse(report["manifest"]["present"])
 
+    def test_private_calibration_build_board_and_coverage_data_rejected(self):
+        for schema in ('vfl.tone-calibration.v1','vfl.tone-observations.v1','tycvl.native-build.v1',
+                       'tycvl.device-coverage.v1','tycvl.board.request.v1'):
+            path=self.put('docs/data.json',json.dumps({'schema':schema}))
+            self.assertFalse(audit(self.root)['clean'],schema)
+            path.unlink()
+        path=self.put('docs/data.json',json.dumps([{'frequency_hz':100,'values':[42]}]))
+        self.assertFalse(audit(self.root)['clean'])
+        path.unlink()
+
     def test_manifest_detects_changed_missing_and_unlisted_sources(self):
         self.install_manifest()
         path = self.root / "README.md"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tycvirtuallab"
-version = "0.1.0"
+version = "0.2.0"
 description = "Deterministic virtual firmware capture and comparison, with private experiments"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,9 +14,11 @@ dependencies = []
 [project.scripts]
 tycvl = "vfl.cli:main"
 tycvl-ghidra = "vfl.ghidra:main"
+tycvl-glorb-host = "vfl.glorb_host:main"
 
-[tool.setuptools]
-packages = ["vfl"]
+[tool.setuptools.packages.find]
+include = ["vfl", "vfl.*"]
+namespaces = false
 
 [tool.setuptools.package-data]
-vfl = ["web/*", "profiles/*.json", "ghidra/*.java"]
+vfl = ["web/*", "profiles/*.json", "ghidra/*.java", "native/*.h", "native/*.cpp", "native/*.py", "native/*.c", "native/*.ld"]

@@ -65,6 +65,9 @@ def compare(left, right, *, include_state=True, include_events=False):
     base = {"schema": "vfl.comparison.v1", "left_execution": lm["execution_kind"],
             "right_execution": rm["execution_kind"], "input_sha256": lm["input_sha256"],
             "left_capture_sha256": digest(left), "right_capture_sha256": digest(right),
+            "implementations": {side: {key: manifest[key] for key in
+                ("backend","tool_version","tool_source_sha256","runtime_assets_sha256") if key in manifest}
+                for side, manifest in (("left",lm),("right",rm))},
             "scope": {"rgb": True, "state": include_state, "events": include_events, "event_kinds": event_kinds,
                       "omitted_empty_event_kinds": omitted_empty_kinds},
             "verification": "unverified", "frames_compared": 0, "events_compared": 0,

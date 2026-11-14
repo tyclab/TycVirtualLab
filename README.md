@@ -4,12 +4,58 @@ TycVirtualLab runs reproducible firmware experiments, captures LED buffers and
 internal state, compares independent implementations, and displays captures in an
 offline viewer. Its command is `tycvl`.
 
-The shareable project contains the test machinery, original synthetic examples,
-and adapter contracts. Firmware, recovered vendor algorithms, memory maps,
-recordings, private profiles, and experiment results stay outside this repository.
-The MIT license covers this project's original setup code, not those inputs.
+The shareable project includes device setup for HyperCube, Exoy ONE and GLORB,
+version-pinned address maps, input adapters, execution engines and validation tools.
+Firmware blobs, externally supplied renderer source, recordings, fitted calibration
+coefficients and experiment results remain outside this repository. The MIT license
+covers this project's original setup code, not those external inputs.
 
-## Quick start
+Use `tycvl device list` to inspect real execution adapters and `tycvl device effects
+hypercube` to list selectors. The `*-demo` profiles are separate synthetic fixtures.
+
+## Device setup
+
+Supply local assets; generated profiles refer to them by path and SHA256. HyperCube
+accepts its supported application image and ROM:
+
+```sh
+tycvl device prepare hypercube --firmware /path/to/application.bin --rom /path/to/rom.bin --build-dir ../TycVirtualLab-private/hypercube-image --out ../TycVirtualLab-private/hypercube.json
+tycvl generate --frames 300 --kind music-noise --out ../TycVirtualLab-private/input.json
+tycvl run ../TycVirtualLab-private/hypercube.json ../TycVirtualLab-private/input.json --out ../TycVirtualLab-private/hypercube-run
+```
+
+`--settings` accepts a JSON settings object; `--input` compiles scheduled controls
+into the original-code profile. `--headless`, `--limiter` and repeated `--hold-file`
+configure the local emulator and resource coordination. `device coverage hypercube`
+executes selector cases with independent initialization and retains each failure.
+
+GLORB builds a native host around the supplied recovered C++ renderer, with the
+factory palettes and LED map loaded from the same source repository:
+
+```sh
+tycvl device prepare glorb --source-root /path/to/renderer-repository --preset 2 --build-dir ../TycVirtualLab-private/glorb-build --out ../TycVirtualLab-private/glorb.json
+tycvl generate --profile ../TycVirtualLab-private/glorb.json --kind silence --frames 600 --out ../TycVirtualLab-private/glorb-input.json
+tycvl run ../TycVirtualLab-private/glorb.json ../TycVirtualLab-private/glorb-input.json --out ../TycVirtualLab-private/glorb-run
+```
+
+This profile takes one scalar `wled-volume-smth` channel, whose units and range
+must match its profile. It records actual renderer output and segment state, plus a separately labeled
+model of WLED 0.14 current limiting and bus brightness. The
+public host boundary preserves masked-cell reads and writes, integer palette
+arithmetic and frame history. Exoy uses `device prepare exoy-one` with its own
+application image; inspect its selector inventory and declared execution boundary.
+Use `generate --profile` for each device to retain its input units and channel count.
+
+GLORB also has an [original ESP32-S3 firmware backend](docs/glorb-original.md),
+paired with the source host for byte/state comparisons. Exoy has a separate
+[full-board QEMU backend](docs/board.md) that boots a supplied flash copy and
+captures original scene and driver buffers. These paths declare their hardware
+stand-ins and clock models explicitly.
+
+See [device details](docs/devices.md) and the [measured audio workflow](docs/calibration.md).
+All commands can also be invoked as `python3 -m vfl` from a checkout.
+
+## Framework quick start
 
 Linux (including WSL2) and Python 3.11 or newer are required; the core has no
 third-party Python dependencies. Process groups and resource locks use Unix APIs;
@@ -59,8 +105,8 @@ units, range, channel count, random seed and clock policy are explicit.
 - **PCM:** normalized mono sample blocks with an explicit sample rate and block
   size. A device adapter must identify the correct firmware sample-input boundary.
 - **WAV to bands:** a separate approximate seven-filter/peak-envelope model. It
-  includes read-dependent decay and declares its parameters and omissions. It is
-  not a calibrated physical microphone model or a plain FFT replacement.
+  includes read-dependent decay and declares its parameters and omissions. A fitted
+  measured-path model is selected with `--calibration` and explicit ADC scaling.
 
 ```sh
 python3 -m vfl tone --frequency 160 --frequency 1000 --seconds 2 --out ../TycVirtualLab-private/tones.json
@@ -78,10 +124,12 @@ they are never bundled into the source distribution.
 The public external-process interface can host Ghidra, QEMU, a recovered native
 renderer, or another execution engine without pretending those engines already
 model a particular device. The included `tycvl-ghidra` adapter executes configured
-Xtensa call0 routines, with target addresses and images supplied externally;
-see [docs/ghidra.md](docs/ghidra.md). Other engines require their own adapters.
-A private configuration or adapter owns loading, memory maps, ROM,
-initialization, entry points, peripheral hooks and output conversion. The included
+Xtensa call0 and register-window routines, with images supplied externally;
+see [docs/ghidra.md](docs/ghidra.md). The included Exoy board adapter uses QEMU and
+Xtensa GDB; additional devices need their own board integration.
+Reusable device adapters provide loading, memory maps, initialization, entry
+points, peripheral hooks and output conversion. Local profiles select their assets
+and settings. The included
 strict `vfl.hsemu` parser supports an existing D/R/E/X dump protocol without
 embedding firmware addresses. See [docs/adapters.md](docs/adapters.md).
 
@@ -139,7 +187,7 @@ universal secret detector; review the archive before publication.
 
 ```sh
 python3 -m vfl audit-source
-python3 -m vfl export-source --out ../TycVirtualLab-private/TycVirtualLab-source.tar.gz
+python3 -m vfl export-source --out ../TycVirtualLab-releases/TycVirtualLab-source.tar.gz
 python3 -m vfl verify-source /path/to/extracted/TycVirtualLab
 ```
 
