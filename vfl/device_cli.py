@@ -37,6 +37,14 @@ def add_parser(sub):
     glorb.add_argument("--hold-file", action="append", default=[])
     glorb.add_argument("--timeout-s", type=int, default=1200)
     glorb.add_argument("--out", required=True)
+    audio = actions.add_parser("glorb-audio", help="measure signed PCM, filter and spectrum in supported GLORB S3 applications")
+    audio.add_argument("--firmware", nargs="+", required=True, help="identified standalone application images")
+    audio.add_argument("--bootloader", required=True, help="compatible ESP32-S3 bootloader binary")
+    audio.add_argument("--qemu", required=True, help="Espressif qemu-system-xtensa")
+    audio.add_argument("--gdb", required=True, help="Python-enabled Xtensa GDB")
+    audio.add_argument("--rom-dir", required=True, help="QEMU directory containing the ESP32-S3 ROM")
+    audio.add_argument("--timeout-s", type=int, default=120, help="timeout per application")
+    audio.add_argument("--out", required=True, help="fresh private result JSON")
     coverage = actions.add_parser("coverage", help="run original selector cases with fresh state")
     coverage.add_argument("device", choices=["hypercube", "exoy-one"])
     _hypercube_assets(coverage)
@@ -63,6 +71,9 @@ def _hypercube_assets(parser, *, rom=True):
 
 
 def execute(args):
+    if args.device_action == "glorb-audio":
+        from .devices import glorb_audio
+        return glorb_audio.execute(args)
     from .devices import glorb, hypercube
     from .devices import exoy
     modules = {"hypercube": hypercube, "glorb": glorb, "exoy-one":exoy}
