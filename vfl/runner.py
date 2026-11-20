@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 from . import __version__
-from .model import (MAX_JSON_BYTES, LabError, compatible_input, digest, experiment_digest, file_digest,
+from .model import (MAX_JSON_BYTES, LabError, compatible_input, digest, execution_scope, experiment_digest, file_digest,
                     load_json, number, private_path, require, validate_capture, validate_profile,
                     validate_trace, write_json)
 
@@ -322,7 +322,7 @@ def run_capture(profile_path, trace_path, output_dir):
         require(_source_fingerprint() == source_fingerprint, "runner source changed during execution")
         manifest = result["manifest"]
         # These identity fields come only from the runner, never from a backend's claim.
-        manifest.update({"tool": "TycVirtualLab", "tool_version": __version__,
+        manifest.update({"execution_scope": execution_scope(manifest), "tool": "TycVirtualLab", "tool_version": __version__,
                          "python_version": sys.version.split()[0],
                          "tool_source_sha256": source_fingerprint,
                          "target": validate_target(profile.get("target")), "asset_inspection": inspected_assets,

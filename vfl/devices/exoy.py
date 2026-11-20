@@ -11,6 +11,7 @@ import struct
 import shutil
 import sys
 
+from .. import device_inputs
 from ..firmware import inspect_image
 from ..model import LabError, compatible_input, file_digest, integer, private_path, require, validate_profile, validate_trace
 
@@ -55,7 +56,7 @@ def effect_inventory():
 
 def device_info():
     return {"id":"exoy-one","name":"Exoy ONE","revision":"v2.1",
-            "execution_kind":"original-firmware","backend":"ghidra-pcode, logical Xtensa windows",
+            "execution_kind":"original-firmware","execution_scope":"routine-diagnostic","backend":"ghidra-pcode, logical Xtensa windows",
             "image_sha256":APP_SHA256,"source":SOURCE,"effects":effect_inventory(),
             "input":copy.deepcopy(ADC_INPUT),"renderer_input":copy.deepcopy(INPUT),
             "renderer_input_limitations":[RENDERER_INPUT_LIMITATION],"rom_sha256":ROM_SHA256,"limitations":list(LIMITATIONS)}
@@ -203,8 +204,10 @@ def build_profile(elf,*,rom=None,settings=None,trace=None,headless=None,limiter=
         config["hooks"] = [hook for hook in config["hooks"] if hook["address"] != 0x400ddbe0]
         config["hooks"].append({"address":0x400efcf0,"kind":"adc"})
         config.pop("input_writes")
-        config["allow_unused_input"] = True  # Original selectors may explicitly disable sound.
+        config["input_read_policy"] = "exoy-adc"
         config["state"].append({"id":"audio-state","address":0x3ffd0400,"size":256})
+    else:
+        config["input_read_policy"] = "exoy-renderer"
     assets=[{"role":"elf","format":"elf","path":str(program),"sha256":sha}]
     if rom is not None:
         path = Path(rom).expanduser().resolve(strict=True)
@@ -313,6 +316,7 @@ def _collect_coverage_case(profile, trace, commands, output, output_tags, state_
         selector = bytes.fromhex(frame["state"]["selector-state"])
         require(int.from_bytes(selector[12:16], "little") == expected_settings["pack"]
                 and selector[16] == expected_settings["effect"], "captured scene selection differs from requested controls")
+    device_inputs.record_input_evidence(profile, trace, capture)
     encoding = config["state_encoding"]
     if encoding == "sha256":
         for frame in capture["frames"]:
@@ -375,7 +379,7 @@ def run_coverage(elf, rom, output_dir, *, case_ids=None, trace=None, frames=4, b
     script = (Path(script_path).expanduser().resolve(strict=True) if script_path is not None else
               Path(ghidra.__file__).with_name("ghidra") / "TycEmu.java")
     require(script.name == "TycEmu.java" and script.is_file(), "campaign script must be a declared TycEmu.java file")
-    for source in (Path(__file__), Path(ghidra.__file__), Path(hsemu.__file__), Path(model.__file__), script):
+    for source in (Path(__file__), Path(ghidra.__file__), Path(hsemu.__file__), Path(model.__file__), Path(device_inputs.__file__), script):
         shutil.copyfile(source, runtime / source.name)
     # The limiter can wait before acquiring its lock. Check HOLD again after
     # that wait, immediately before replacing this tiny process with Ghidra.
@@ -450,7 +454,7 @@ def run_coverage(elf, rom, output_dir, *, case_ids=None, trace=None, frames=4, b
                 require(process_error is None, "batch process did not complete: " + str(process_error))
                 write_json(directory / "capture.json", capture)
                 rgb = ["".join(frame["buses"].values()) for frame in capture["frames"]]
-                result.update(status="passed", frames=len(rgb), nonblack_frames=sum(any(bytes.fromhex(raw)) for raw in rgb),
+                result.update(status="executed", frames=len(rgb), nonblack_frames=sum(any(bytes.fromhex(raw)) for raw in rgb),
                               distinct_frames=len(set(rgb)), events=len(capture["events"]),
                               read_counts=capture["manifest"]["adapter_provenance"]["read_counts"],
                               capture_sha256=file_digest(directory / "capture.json"),
@@ -479,7 +483,9 @@ def run_coverage(elf, rom, output_dir, *, case_ids=None, trace=None, frames=4, b
         # The optional shared limiter polls at two-second intervals. Yield after
         # every batch so a fresh process cannot repeatedly steal its next slot.
         time.sleep(3)
-    summary.update(status="completed", passed=sum(case["status"] == "passed" for case in summary["cases"]),
+    executed = sum(case["status"] == "executed" for case in summary["cases"])
+    summary.update(status="completed", executed=executed, passed=executed,
+                   passed_semantics="Compatibility count of executed cases with observed requested pack selectors; fidelity is not evaluated",
                    failed=sum(case["status"] == "failed" for case in summary["cases"]))
     write_json(out / "campaign.json", summary)
     return summary

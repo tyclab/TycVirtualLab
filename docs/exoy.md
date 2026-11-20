@@ -67,9 +67,7 @@ tycvl device coverage exoy-one --elf ../TycVirtualLab-private/exoy-build/applica
 Omit `--case` for the 70-selection campaign. Each case starts fresh state; the
 campaign records original pack-selector instruction entry, RGB snapshots,
 actual ADC/clock/RNG boundary events, and strict undefined-read enforcement.
-A campaign status of `passed` means the bounded execution checks passed; its
-`fidelity` field remains `not-evaluated`. It is not a pixel match against a
-physical lamp. A short smoke does not prove later behavior or every setting. Cases
+A case receives `executed` after the requested pack selector was reached and its input checks completed. The `executed` aggregate counts these cases. The legacy `passed` aggregate carries the same count for existing readers. Physical fidelity stays `not-evaluated`. A short smoke does not prove later behavior or every setting. Cases
 are bound to command, asset and source hashes and a fresh request nonce. They
 are campaign evidence, not the outer runner's completed-run envelope; standalone
 capture comparison therefore requires `--unverified`.

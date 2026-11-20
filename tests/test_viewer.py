@@ -132,6 +132,7 @@ class ViewerDataTests(unittest.TestCase):
         backward = capture_fixture(); backward["frames"][1]["time_us"] = 0; variants.append(backward)
         duplicate_time = capture_fixture(); duplicate_time["frames"][1]["time_us"] = 10; variants.append(duplicate_time)
         missing_capability = capture_fixture(); del missing_capability["manifest"]["capabilities"]["rng_log"]; variants.append(missing_capability)
+        wrong_scope = capture_fixture(); wrong_scope["manifest"]["execution_scope"] = "board-diagnostic"; variants.append(wrong_scope)
         unknown_execution = capture_fixture(); unknown_execution["manifest"]["execution_kind"] = "verified"; variants.append(unknown_execution)
         duplicate_point = capture_fixture(); duplicate_point["geometry"]["points"] *= 2; variants.append(duplicate_point)
         for capture in variants:

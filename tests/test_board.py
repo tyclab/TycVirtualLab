@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from vfl.board import normalize
+from vfl.board import WATCHDOG_LIMITATION, normalize, verify_completed
 from vfl.model import LabError,canonical,digest,write_json
 from vfl.runner import load_completed_capture
 
@@ -42,6 +42,29 @@ class BoardCaptureTests(unittest.TestCase):
             observed['frames'][1]['adc'][2]=201
             write_json(root/'board-observations.json',observed)
             with self.assertRaisesRegex(LabError,'delivered ADC'):load_completed_capture(root)
+
+    def test_reverify_historical_board_layouts_but_require_current_disclosures(self):
+        for version in (None, 2):
+            request, observed = self.fixture()
+            if version:
+                request["report_version"] = version
+                observed["request_sha256"] = hashlib.sha256(canonical(request) + b"\n").hexdigest()
+            capture = normalize(request, observed)
+            status = {"schema": "tycvl.board.status.v1", "request_sha256": digest(request),
+                      "frames": 2, "execution_kind": "original-firmware"}
+            with tempfile.TemporaryDirectory() as directory:
+                write_json(Path(directory)/"board-observations.json", observed)
+                capture["manifest"].pop("execution_scope")
+                if version:
+                    with self.assertRaisesRegex(LabError, "differs from bound observations"):
+                        verify_completed(directory, request, status, capture)
+                    continue
+                self.assertEqual(verify_completed(directory, request, status, capture), capture)
+                capture["manifest"]["limitations"].remove(WATCHDOG_LIMITATION)
+                self.assertEqual(verify_completed(directory, request, status, capture), capture)
+                capture["manifest"]["limitations"].pop()
+                with self.assertRaisesRegex(LabError, "differs from bound observations"):
+                    verify_completed(directory, request, status, capture)
 
     def test_missing_or_stale_completion_and_partial_adc_rejected(self):
         request,observed=self.fixture()

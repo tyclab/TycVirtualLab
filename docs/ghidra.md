@@ -297,3 +297,5 @@ fail. Floating-point exception/status flags are not modeled. Execution metadata
 records the policy and number of corrected fused instructions. An authored
 fixture distinguishes the exact ±2⁻⁴⁶ residual from the incorrect zero produced
 by two binary32 rounds.
+
+Built-in device profiles check sound-enabled intervals against observed reads. HyperCube and Exoy ADC traces require an ADC read in each sound-enabled interval. GLORB checks execution of the original processed-volume load. An earlier read, an initialization event, writing an argument or merely scheduling a timestamp cannot satisfy these checks. A trace too short to reach the audio routine reports the affected frame range. Exoy v2.1 can force music off inside a selector. The capture records that override from the original scene state and a sound-requested comparison with zero reads is inconclusive. Exoy’s optional two-byte renderer input records the number of values supplied to memory. Guest consumption is unobserved at that boundary.
