@@ -111,4 +111,5 @@ def execute(args):
             profile = module.build_profile(elf, rom=args.rom, **options)
     write_json(target, profile)
     return {"profile": str(target), "id": profile["id"],
-            "execution_kind": profile["backend"]["execution_kind"]}
+            "execution_kind": profile["backend"]["execution_kind"],
+            "execution_scope": "routine-diagnostic" if "ghidra" in profile["backend"]["options"] else "host-renderer"}

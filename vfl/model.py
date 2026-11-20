@@ -339,12 +339,33 @@ def compatible_input(profile, trace):
             require(profile["input"][key] == trace["input"].get(key), f"input {key} mismatch")
 
 
+def execution_scope(manifest):
+    """Scope of the known adapter, independent of the origin of its instructions."""
+    backend = manifest.get("backend")
+    if backend == "ghidra-pcode":
+        return "routine-diagnostic"
+    if backend == "qemu-esp32-board":
+        return "board-diagnostic"
+    if backend == "glorb-host-v1":
+        return "host-renderer"
+    kind = manifest.get("execution_kind")
+    return kind if kind in {"synthetic", "replay"} else "unspecified"
+
+
 def validate_capture(capture, profile=None, trace=None):
     mapping(capture, "capture")
     require(capture.get("schema") == "vfl.capture.v1", "unsupported capture schema")
     manifest = mapping(capture.get("manifest"), "manifest")
     identifier(manifest.get("profile_id"), "manifest.profile_id")
     choice(manifest.get("execution_kind"), EXECUTIONS, "invalid execution kind")
+    if "input_evidence" in manifest:
+        evidence = mapping(manifest["input_evidence"], "manifest.input_evidence")
+        for field in ("sound_requested_frames", "observed_frames", "required_frames", "observed_in_required_frames",
+                      "guest_forced_off_frames", "supplied_values"):
+            if field in evidence:
+                integer(evidence[field], f"input_evidence.{field}", 0)
+    if "execution_scope" in manifest:
+        require(manifest["execution_scope"] == execution_scope(manifest), "execution scope differs from backend")
     require(isinstance(manifest.get("backend"), str) and manifest["backend"], "backend provenance required")
     for key in ("input_sha256", "profile_sha256", "experiment_sha256", "tool_source_sha256"):
         if key in manifest:

@@ -140,6 +140,16 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(report["first_difference"]["channel"], "R")
         self.assertEqual(report["first_difference"]["byte_offset"], 4)
 
+    def test_comparison_distinguishes_requested_audio_without_an_observed_read(self):
+        left = identified_capture()
+        right = second(left)
+        left["manifest"]["input_evidence"] = {"sound_requested_frames": 4, "consumption": "unobserved"}
+        report = compare(left, right)
+        self.assertEqual(report["inconclusive_reasons"], ["sound-requested-no-read"])
+        self.assertEqual(report["information"]["audio_evidence"]["right"], None)
+        left["manifest"]["input_evidence"]["sound_requested_frames"] = 0
+        self.assertEqual(compare(left, right)["verdict"], "equal")
+
     def test_equal_needs_information(self):
         left = identified_capture()
         equal = compare(left, second(left))

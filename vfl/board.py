@@ -269,7 +269,7 @@ def _normalize(request, observations):
                       "boot_mic":request["boot_mic"],"initial_assets":initial_assets})}
     return validate_capture({"schema":"vfl.capture.v1", "manifest": {
         "tool":"TycVirtualLab", "tool_version":request.get("tool_version", "0.2.0"), "tool_source_sha256":request["tool_source_sha256"],
-        "profile_id":profile_id, "backend":"qemu-esp32-board", "execution_kind":"original-firmware",
+        "profile_id":profile_id, "backend":"qemu-esp32-board", "execution_kind":"original-firmware", "execution_scope":"board-diagnostic",
         "request_id":request["request_id"], **identities,
         "runtime_assets_sha256": {a["role"]:a["sha256"] for a in request["assets"]
                                   if a["role"] in {"qemu","gdb","esp32-v3-rom.bin","esp32-v3-rom-app.bin"}},

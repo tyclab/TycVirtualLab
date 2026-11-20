@@ -1,6 +1,6 @@
 """Compare matching experiments and stop at the first observable divergence."""
 
-from .model import LabError, choice, digest, integer, require, validate_capture
+from .model import LabError, choice, digest, execution_scope, integer, require, validate_capture
 
 
 def _normalized_events(capture, kinds):
@@ -42,6 +42,7 @@ def _information(left, right, implementations):
         if left["manifest"]["capabilities"][kind + "_log"] and right["manifest"]["capabilities"][kind + "_log"]:
             input_use[kind] = {side: sum(1 for event in capture["events"] if event["kind"] == kind)
                                for side, capture in (("left", left), ("right", right))}
+    audio_evidence = {side: data["manifest"].get("input_evidence") for side, data in (("left", left), ("right", right))}
     same_capture = digest(left) == digest(right)
     same_implementation = implementations["left"] == implementations["right"]
     reasons = []
@@ -56,7 +57,9 @@ def _information(left, right, implementations):
     for kind, counts in input_use.items():
         if bool(counts["left"]) != bool(counts["right"]):
             reasons.append("input-use-" + kind)
-    return {"frames": len(contents), "lit_frames": lit, "distinct_frames": len(set(contents)),
+    if any(e and e.get("sound_requested_frames") and not e.get("observed_frames") for e in audio_evidence.values()):
+        reasons.append("sound-requested-no-read")
+    return {"audio_evidence": audio_evidence, "frames": len(contents), "lit_frames": lit, "distinct_frames": len(set(contents)),
             "same_capture": same_capture, "same_implementation": same_implementation, "input_use": input_use}, reasons
 
 
@@ -95,6 +98,7 @@ def compare(left, right, *, include_state=True, include_events=False, repeat=Fal
         left_events, right_events = _normalized_events(left, event_kinds), _normalized_events(right, event_kinds)
         require(left_events and right_events, "event comparison requested but a common event log is empty")
     base = {"schema": "vfl.comparison.v1", "left_execution": lm["execution_kind"],
+            "left_execution_scope": execution_scope(lm), "right_execution_scope": execution_scope(rm),
             "right_execution": rm["execution_kind"], "input_sha256": lm["input_sha256"],
             "left_capture_sha256": digest(left), "right_capture_sha256": digest(right),
             "implementations": {side: {key: manifest[key] for key in

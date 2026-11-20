@@ -16,6 +16,7 @@ import shutil
 import sys
 import struct
 
+from . import device_inputs
 from .hsemu import capture_from_output
 from .firmware import inspect_image
 from .model import (LabError, compatible_input, digest, experiment_digest, file_digest,
@@ -108,7 +109,9 @@ def compile_commands(profile, trace, assets):
           {"binary_mappings", "state", "state_encoding", "instruction_limit", "output_limit",
            "max_frames", "headless", "launcher_role", "launcher_environment", "timeout_s",
            "allow_uninitialized", "hold_files", "adc_policy", "settings_acknowledgements", "allow_unused_input",
-           "frame_operations", "input_writes", "observations", "adc_scan", "post_launcher_hold_check", "heap"})
+           "frame_operations", "input_writes", "input_read_policy", "observations", "adc_scan", "post_launcher_hold_check", "heap"})
+    if "input_read_policy" in config:
+        require(isinstance(config["input_read_policy"], str) and config["input_read_policy"] in device_inputs.POLICIES, "unknown device input read policy")
     for key in ("allow_uninitialized", "allow_unused_input", "post_launcher_hold_check"):
         require(type(config.get(key, False)) is bool, f"{key} must be boolean")
     require(not config.get("post_launcher_hold_check") or config.get("launcher_role"),
@@ -372,7 +375,7 @@ def execute_request(request_path, capture_path):
     require(isinstance(executable, str) and Path(executable).is_file(), "configure a Ghidra headless executable")
     script = Path(__file__).with_name("ghidra") / "TycEmu.java"
     require(script.is_file(), "packaged Ghidra script missing")
-    fingerprints = {"driver": file_digest(__file__), "script": file_digest(script), "headless": file_digest(executable)}
+    fingerprints = {"driver": file_digest(__file__), "device_inputs": file_digest(device_inputs.__file__), "script": file_digest(script), "headless": file_digest(executable)}
     command_path, output_path = workdir / "ghidra.commands", workdir / "ghidra.output"
     execution_path = Path(str(output_path) + ".execution.json")
     require(not command_path.exists() and not output_path.exists() and not execution_path.exists(), "stale Ghidra artifacts rejected")
@@ -491,9 +494,10 @@ def execute_request(request_path, capture_path):
                            for recipe in config.get("frame_operations", [])
                            for operation in recipe["operations"] if operation["op"] == "call"
                            for arg in operation.get("arguments", []))
-    require(config.get("allow_unused_input", False) or frame_adc_reads + argument_values + len(config.get("input_writes", [])) * len(trace["frames"]) > 0,
+    device_inputs.record_input_evidence(profile, trace, capture)
+    require(device_inputs.policy_for(profile) is not None or config.get("allow_unused_input", False) or frame_adc_reads + argument_values + len(config.get("input_writes", [])) * len(trace["frames"]) > 0,
             "no frame observed ADC input or received an input argument; explicitly allow_unused_input for an input-independent routine")
-    if config.get("allow_unused_input", False):
+    if config.get("allow_unused_input", False) and device_inputs.policy_for(profile) is None:
         capture["manifest"]["limitations"].append("Profile explicitly permits execution without delivering trace input to any frame boundary.")
     encoding = config.get("state_encoding", "bytes")
     if encoding == "sha256":
@@ -519,7 +523,7 @@ def execute_request(request_path, capture_path):
                                    "rng_seed_requested": trace["seed"], "rng_initial_state": trace["seed"] or 1,
                                    "uninitialized_read_warning_count": len(warnings),
                                    "unique_uninitialized_read_warnings": sorted(set(warnings))}})
-    require(fingerprints == {"driver": file_digest(__file__), "script": file_digest(script), "headless": file_digest(executable)}, "backend implementation changed during execution")
+    require(fingerprints == {"driver": file_digest(__file__), "device_inputs": file_digest(device_inputs.__file__), "script": file_digest(script), "headless": file_digest(executable)}, "backend implementation changed during execution")
     require(assets == _asset_paths(profile), "assets changed during execution")
     validate_capture(capture, profile, trace)
     # CREATE_NEW preserves freshness even if the caller races with this process.

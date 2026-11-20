@@ -23,7 +23,7 @@ DEFAULTS = {"effect": "hiphotic", "speed": 128, "intensity": 128,
 
 
 def device_info():
-    return {"id": "glorb", "name": "GLORB", "execution_kind": "recovered-code",
+    return {"id": "glorb", "name": "GLORB", "execution_kind": "recovered-code", "execution_scope": "host-renderer",
             "effects": [{"factory_id": k, "name": v} for k, v in EFFECTS.items()],
             "input": INPUT, "backend": "external C++ renderer source with WLED compatibility boundary"}
 

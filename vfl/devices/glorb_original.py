@@ -184,7 +184,7 @@ def prepare_original(image, source_profile, output_dir, *, compiler, headless=No
               "outputs": [{"id": "logical", "address": LOGICAL, "size": 360}, {"id": "mapped", "address": PHYSICAL, "size": 360}],
               "state": [{"id": "segment", "address": SEGMENT+44, "size": 12}],
               "instruction_limit": 2000000, "max_frames": 5000, "output_limit": 64*1024*1024,
-              "settings_acknowledgements": copy.deepcopy(selected), "allow_unused_input": True,
+              "settings_acknowledgements": copy.deepcopy(selected), "input_read_policy": "glorb-volume",
               "timeout_s": float(timeout_s)*.9, "hold_files": hold_files}
     if headless is not None:
         ghidra["headless"] = str(Path(headless).resolve(strict=True))

@@ -135,6 +135,8 @@ embedding firmware addresses. See [docs/adapters.md](docs/adapters.md).
 
 ## What a comparison proves
 
+New captures also identify the execution boundary with `execution_scope`. `routine-diagnostic` runs selected original instructions with declared hooks. `board-diagnostic` runs the QEMU board with the debugger and watchdog settings recorded in its manifest. `host-renderer` executes compiled renderer source. A scheduled Ghidra frame time and the board's observed CCOUNT are distinct clock sources. Ghidra records actual frame clock reads and the audio boundary observed. The recorded scope describes execution only. Historical captures retain their original bytes and hashes.
+
 Capture manifests distinguish `original-firmware`, `recovered-code`, `synthetic`,
 and `replay`. Execution kind is an explicit adapter declaration checked against
 its profile, not certification that arbitrary external code tells the truth.

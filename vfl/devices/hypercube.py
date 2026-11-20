@@ -11,6 +11,7 @@ from pathlib import Path
 import struct
 import sys
 
+from .. import device_inputs
 from ..firmware import inspect_image
 from ..model import LabError, compatible_input, file_digest, integer, private_path, require, validate_profile, validate_trace
 
@@ -196,7 +197,7 @@ def effect_inventory():
 def device_info():
     return {"id": "hypercube", "revision": REVISION,
             "target": {"chip": "esp8266", "isa": "xtensa-lx106", "abi": "xtensa-call0"},
-            "execution": "original-firmware", "selectors": 98, "routines": 96,
+            "execution": "original-firmware", "execution_scope": "routine-diagnostic", "selectors": 98, "routines": 96,
             "input": copy.deepcopy(INPUT), "effects": effect_inventory(),
             "defaults": copy.deepcopy(DEFAULTS),
             "startup": {"static_initializers": 0x40220974, "application_setup": 0x402206f8,
@@ -406,7 +407,7 @@ def build_profile(elf, rom, *, settings=None, trace=None, headless=None, limiter
               "state_encoding": state_encoding, "settings_acknowledgements": copy.deepcopy(s),
               "timeout_s": timeout_s - 10, "instruction_limit": 2000000, "max_frames": 5000,
               "output_limit": 256 * 1024 * 1024, "adc_policy": "strict",
-              "allow_unused_input": True,
+              "input_read_policy": "hypercube-adc",
               "hold_files": [str(Path(path).expanduser().absolute()) for path in hold_files]}
     if headless is not None: config["headless"] = str(Path(headless).expanduser().resolve(strict=True))
     assets = [{"role": "elf", "format": "elf", "path": str(program), "sha256": program_sha},
@@ -516,11 +517,12 @@ def _collect_coverage_case(profile, trace, commands, output, output_tags, state_
             require(event["value"] == expected & 0xffffffff, "observed clock differs from frozen schedule")
     require(all(capture["manifest"]["capabilities"].get(key) is True for key in ("adc_log", "clock_log", "rng_log", "state")),
             "coverage instrumentation capabilities incomplete")
+    device_inputs.record_input_evidence(profile, trace, capture)
     encoding = config["state_encoding"]
     if encoding == "sha256":
         for frame in capture["frames"]:
             frame["state"] = {tag: hashlib.sha256(bytes.fromhex(raw)).hexdigest() for tag, raw in frame["state"].items()}
-    capture["manifest"].update(request_id=nonce, input_sha256=digest(trace), profile_sha256=digest(profile),
+    capture["manifest"].update(execution_scope="routine-diagnostic", request_id=nonce, input_sha256=digest(trace), profile_sha256=digest(profile),
         experiment_sha256=experiment_digest(profile, trace), state_encoding=encoding,
         adapter_provenance={**provenance, "execution_metadata": execution, "read_counts": read_counts,
                             "commands_sha256": hashlib.sha256(commands.encode()).hexdigest(), "output_sha256": file_digest(output),
@@ -579,7 +581,7 @@ def run_coverage(elf, rom, output_dir, *, case_ids=None, trace=None, frames=20, 
     script = (Path(script_path).expanduser().resolve(strict=True) if script_path is not None else
               Path(ghidra.__file__).with_name("ghidra") / "TycEmu.java")
     require(script.name == "TycEmu.java" and script.is_file(), "campaign script must be a declared TycEmu.java file")
-    for source in (Path(__file__), Path(ghidra.__file__), Path(hsemu.__file__), Path(model.__file__), script):
+    for source in (Path(__file__), Path(ghidra.__file__), Path(hsemu.__file__), Path(model.__file__), Path(device_inputs.__file__), script):
         shutil.copyfile(source, runtime / source.name)
     # The limiter can wait before acquiring its lock. Check HOLD again after
     # that wait, immediately before replacing this tiny process with Ghidra.

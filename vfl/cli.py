@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .model import (LabError, load_json, number, private_path, validate_capture,
+from .model import (LabError, execution_scope, load_json, number, private_path, validate_capture,
                     validate_profile, validate_trace, write_json)
 
 
@@ -129,7 +129,7 @@ def main(argv=None):
         elif args.command == "board":
             from .board import run_board
             path = run_board(args)
-            _emit({"capture": str(path), "execution_kind": "original-firmware", "boot": "qemu-esp32"})
+            _emit({"capture": str(path), "execution_kind": "original-firmware", "execution_scope": "board-diagnostic", "boot": "qemu-esp32"})
         elif args.command == "calibration":
             from .calibration import evaluate_tones, fit_tone_profile
             observations = load_json(args.observations)
@@ -242,6 +242,7 @@ def main(argv=None):
             result = load_json(output)
             _emit({"capture": str(output), "frames": len(result["frames"]),
                    "execution_kind": result["manifest"]["execution_kind"],
+                   "execution_scope": execution_scope(result["manifest"]),
                    "limitations": result["manifest"]["limitations"]})
         elif args.command == "compare":
             from .compare import compare
@@ -261,6 +262,7 @@ def main(argv=None):
             capture = load_completed_capture(args.path)
             _emit({"schema": "vfl.run-verification.v1", "verified": True,
                    "capture_sha256": digest(capture), "frames": len(capture["frames"]),
+                   "execution_scope": execution_scope(capture["manifest"]),
                    "scope": "Local completed-run status, hash and request consistency; not signed attestation"})
         elif args.command == "view":
             from .viewer import export_html

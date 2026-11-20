@@ -1,5 +1,12 @@
 "use strict";
 
+function executionScope(manifest) {
+  if (manifest.backend === "ghidra-pcode") return "routine-diagnostic";
+  if (manifest.backend === "qemu-esp32-board") return "board-diagnostic";
+  if (manifest.backend === "glorb-host-v1") return "host-renderer";
+  return ["synthetic", "replay"].includes(manifest.execution_kind) ? manifest.execution_kind : "unspecified";
+}
+
 function validateCapture(value) {
   const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
   const integer = (v) => Number.isSafeInteger(v) && v >= 0;
@@ -9,6 +16,7 @@ function validateCapture(value) {
   for (const key of ["profile_id", "execution_kind", "backend"]) {
     if (typeof value.manifest[key] !== "string" || !value.manifest[key]) fail(`Manifest ${key} must be a nonempty string.`);
   }
+  if (value.manifest.execution_scope !== undefined && value.manifest.execution_scope !== executionScope(value.manifest)) fail("Execution scope differs from backend.");
   if (!Array.isArray(value.manifest.limitations) || value.manifest.limitations.some((v) => typeof v !== "string")) fail("Manifest limitations must be an array of strings.");
   if (!["synthetic", "original-firmware", "recovered-code", "replay"].includes(value.manifest.execution_kind)) fail("Unsupported execution kind.");
   if (!object(value.manifest.capabilities) || ["adc_log", "clock_log", "rng_log", "state"].some((key) => typeof value.manifest.capabilities[key] !== "boolean")) fail("Manifest capabilities must explicitly declare ADC, clock, RNG and state booleans.");
@@ -129,7 +137,7 @@ if (typeof document !== "undefined") (() => {
     reset(); capture = value;
     byId("error").hidden = true;
     const manifest = capture.manifest;
-    text("profile", manifest.profile_id); text("execution", manifest.execution_kind); text("backend", manifest.backend);
+    text("profile", manifest.profile_id); text("execution", executionScope(manifest) === manifest.execution_kind ? manifest.execution_kind : `${executionScope(manifest)} (${manifest.execution_kind})`); text("backend", manifest.backend);
     text("count", String(capture.frames.length));
     for (const limit of manifest.limitations.length ? manifest.limitations : ["No limitations declared by this capture."]) {
       const item = document.createElement("li"); item.textContent = limit; byId("limits").append(item);
