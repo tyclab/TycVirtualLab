@@ -10,6 +10,7 @@ from pathlib import Path
 from .devices.glorb import INPUT, NAMES, palette_rgb16, settings
 from .model import (LabError, canonical, compatible_input, digest, experiment_digest, file_digest, integer,
                     load_json, private_path, require, validate_capture, validate_profile, validate_trace)
+from .output import glorb_driver
 from .runner import run_process
 
 
@@ -35,10 +36,7 @@ def compile_commands(profile, trace, nonce):
                       {"id": "mapped", "pixels": count, "order": "RGB", "stage": "logical"}]
     if "driver" in config:
         expected_buses.append({"id": "driver", "pixels": count, "order": "RGB", "stage": "driver"})
-        require(isinstance(config["driver"], dict) and set(config["driver"]) == {"brightness", "limit_ma", "led_ma"},
-                "invalid driver configuration")
-        from .output import wled14_rgb
-        wled14_rgb(bytes(count * 3), **config["driver"])
+        glorb_driver(bytes(count * 3), config["driver"])
     require(profile["buses"] == expected_buses, "GLORB bus layout differs from renderer")
     palette = palette_rgb16(config["palette_rgb16"])
     values = settings(profile["settings"])
@@ -84,8 +82,7 @@ def parse_output(text, profile, trace, nonce, command_hash):
         frames.append({"index": source["index"], "time_us": source["time_us"],
                        "buses": {"logical": words[5], "mapped": words[6]}, "state": {"segment": words[7]}})
         if driver is not None:
-            from .output import wled14_rgb
-            pixels, state = wled14_rgb(bytes.fromhex(words[6]), **driver)
+            pixels, state = glorb_driver(bytes.fromhex(words[6]), driver)
             frames[-1]["buses"]["driver"] = pixels.hex()
             frames[-1]["state"]["output"] = struct.pack("<BBII", state["brightness"], state["limited_brightness"],
                                                        state["estimated_ma"], state["limit_ma"]).hex()
@@ -102,8 +99,8 @@ def parse_output(text, profile, trace, nonce, command_hash):
               "capabilities": {"adc_log": False, "clock_log": False, "rng_log": False, "state": True},
               "protocol_binding": {"request_id": nonce, "commands_sha256": command_hash},
               "limitations": ["Runs the supplied recovered renderer source with a WLED/FastLED compatibility boundary.",
-                              "Logical and mapped RGB preserve renderer history. Optional driver bytes use the declared WLED 0.14 RGB current/brightness model; no whole-frame gamma is added.",
-                              "Driver brightness is the internal bus value, not a user slider. Factory host profiles start at 255. Electrical wire timing is not captured.",
+                              "Logical and mapped RGB preserve renderer history. Optional driver bytes use the profile's RGB current/brightness model. Whole-frame color gamma is outside this adapter.",
+                              "Driver brightness is the internal bus value, not a user slider. Each frame writes the complete mapped RGB bus once. Electrical wire timing is not captured.",
                               "Input is processed WLED volumeSmth at the AudioReactive boundary; PDM decimation and AGC require their own input adapter.",
                               "Changing effects resets segment state and pixel history; timed WLED effect crossfades are not part of this host boundary.",
                               "Native host integer widths and the standard math library can differ from ESP32-S3; the pinned host-build report records the actual ABI.",
@@ -147,6 +144,8 @@ def execute_request(request_path, capture_path):
     result["manifest"]["adapter_provenance"] = {"driver_sha256": file_digest(__file__), "assets": checksums,
           "processed_audio_reads": sum(e.get("boundary") == "processed-audio" for e in result["events"]),
           "commands_sha256": command_hash, "output_sha256": file_digest(output_path)}
+    if "driver" in profile["backend"]["options"]["glorb"]:
+        result["manifest"]["adapter_provenance"]["output_model_sha256"] = file_digest(Path(__file__).with_name("output.py"))
     require(checksums == {role: file_digest(entry["path"]) for role, entry in declared.items()}, "GLORB assets changed during execution")
     require(file_digest(command_path) == command_hash, "GLORB command file changed during execution")
     with target.open("x") as output:

@@ -25,6 +25,10 @@ def add_parser(sub):
     glorb.add_argument("--source-root", required=True, help="repository containing glorb/usermod and factory assets")
     glorb.add_argument("--build-dir", required=True)
     glorb.add_argument("--preset", type=int, default=2)
+    glorb.add_argument("--driver-model", choices=["wled14", "wled16"], default="wled14",
+                       help="RGB output model for source execution (default: wled14)")
+    glorb.add_argument("--driver-brightness", type=int, default=255,
+                       help="internal RGB bus brightness for source execution (0–255)")
     glorb.add_argument("--compiler")
     glorb.add_argument("--original-image", help="execute original GLORB machine code using this supported S3 image")
     glorb.add_argument("--original-compiler", help="Xtensa ESP32-S3 GCC used to build the authored memory bus")
@@ -79,7 +83,10 @@ def execute(args):
     require(not target.exists(), "device output already exists; choose a fresh path")
     if args.device == "glorb":
         require(bool(args.original_image) == bool(args.original_compiler), "original GLORB execution requires both --original-image and --original-compiler")
-        profile = glorb.prepare_repository(args.source_root, args.build_dir, preset=args.preset, compiler=args.compiler)
+        require(not args.original_image or (args.driver_model == "wled14" and args.driver_brightness == 255),
+                "original GLORB routine execution has no driver output stage")
+        profile = glorb.prepare_repository(args.source_root, args.build_dir, preset=args.preset, compiler=args.compiler,
+                                           driver_model=args.driver_model, driver_brightness=args.driver_brightness)
         if args.original_image:
             from .devices.glorb_original import prepare_original
             prepared = prepare_original(args.original_image, profile, Path(args.build_dir)/"original",
