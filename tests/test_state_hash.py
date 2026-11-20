@@ -27,6 +27,7 @@ class StateHashTests(unittest.TestCase):
     def test_hash_difference_does_not_claim_raw_byte_offset(self):
         altered = copy.deepcopy(self.hashed)
         altered["frames"][1]["state"]["machine"] = "ab" * 32
+        altered["manifest"]["backend"] = "demo-second"  # a second implementation: an equal result needs two
         result = compare(self.hashed, altered)
         self.assertEqual(result["first_difference"]["reason"], "state-hash")
         self.assertEqual(result["first_difference"]["frame"], 1)

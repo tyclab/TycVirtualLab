@@ -281,6 +281,7 @@ def _normalize(request, observations):
         "boot":{"skipped_show_frames":boot_frames,"wifi_failures":wifi_failures},
         "limitations":["Boots a private copy of supplied flash, including its SDK bootloader and persisted settings; these need not be the physical lamp's boot assets.",
          "IPC stall handshake, ADC channel6, offline WiFi failure and RMT send are explicit debugger hardware stand-ins.",
+         "The timer-group watchdogs are switched off in QEMU (timer.esp32.timg wdt_disable): a stall that resets a lamp does not reset this run.",
          "Packet i belongs to scene/output frame i; zero-read frames discard their packet. Source PCM timestamps do not drive QEMU's clock or establish physical ADC acquisition spacing.",
          "Display timestamps convert observed CCOUNT using the declared frequency; this is a QEMU observation, not measured silicon timing.",
          "ADC and WiFi stand-ins consume no simulated conversion/attempt time; only the RMT stand-in invokes the declared ROM delay.",

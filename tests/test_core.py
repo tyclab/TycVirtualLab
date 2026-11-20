@@ -19,6 +19,14 @@ def profile():
         "backend": {"kind": "demo"}, "firmware": [], "geometry": {"kind": "strips"}}
 
 
+def second(capture):
+    """The same capture as a second implementation would give it: compare() calls an equal result between two
+    captures of one implementation inconclusive unless the caller declares a repeat."""
+    result = copy.deepcopy(capture)
+    result["manifest"]["backend"] = "demo-second"
+    return result
+
+
 def identified_capture(p=None, t=None):
     p = profile() if p is None else p
     t = generate_trace(4, 1000, channels=1, maximum=255) if t is None else t
@@ -119,8 +127,8 @@ class CoreTests(unittest.TestCase):
 
     def test_compare_exact_first_rgb_difference_and_channel_order(self):
         left = identified_capture()
-        self.assertEqual(compare(left, copy.deepcopy(left))["verdict"], "equal")
-        right = copy.deepcopy(left)
+        self.assertEqual(compare(left, second(left))["verdict"], "equal")
+        right = second(left)
         raw = bytearray.fromhex(right["frames"][2]["buses"]["main"])
         raw[4] ^= 1
         raw[7] ^= 1
@@ -132,9 +140,46 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(report["first_difference"]["channel"], "R")
         self.assertEqual(report["first_difference"]["byte_offset"], 4)
 
+    def test_equal_needs_information(self):
+        left = identified_capture()
+        equal = compare(left, second(left))
+        self.assertEqual((equal["verdict"], equal["relation"]), ("equal", "two-implementations"))
+        self.assertEqual({k: equal["information"][k] for k in ("frames", "lit_frames", "distinct_frames")},
+                         {"frames": 4, "lit_frames": 4, "distinct_frames": 4})
+        # one capture against itself, and one implementation twice without saying so
+        same = compare(left, copy.deepcopy(left))
+        self.assertEqual((same["verdict"], same["inconclusive_reasons"]), ("inconclusive", ["same-capture"]))
+        again = copy.deepcopy(left)
+        again["manifest"]["limitations"] = list(again["manifest"]["limitations"]) + ["a second run"]
+        self.assertEqual(compare(left, again)["inconclusive_reasons"], ["same-implementation"])
+        for other_run in (again, copy.deepcopy(left)):  # a deterministic implementation repeats its capture exactly
+            repeat = compare(left, other_run, repeat=True)
+            self.assertEqual((repeat["verdict"], repeat["relation"]), ("equal", "repeat"))
+        with self.assertRaisesRegex(LabError, "implementations differ"):
+            compare(left, second(left), repeat=True)
+        # frames without light
+        black_left, black_right = copy.deepcopy(left), second(left)
+        for capture_ in (black_left, black_right):
+            for frame in capture_["frames"]:
+                frame["buses"] = {name: "00" * (len(value) // 2) for name, value in frame["buses"].items()}
+        black = compare(black_left, black_right, include_state=False)
+        self.assertEqual((black["verdict"], black["inconclusive_reasons"]), ("inconclusive", ["all-black"]))
+        self.assertEqual(black["information"]["lit_frames"], 0)
+        # one side read an input the other never read
+        deaf = second(left)
+        deaf["events"] = [event for event in deaf["events"] if event["kind"] != "adc"]
+        unread = compare(left, deaf)
+        self.assertEqual((unread["verdict"], unread["inconclusive_reasons"]), ("inconclusive", ["input-use-adc"]))
+        self.assertEqual(unread["information"]["input_use"]["adc"], {"left": 4, "right": 0})
+        # a difference stays a difference
+        other = second(left)
+        raw = bytearray.fromhex(other["frames"][1]["buses"]["main"]); raw[0] ^= 1
+        other["frames"][1]["buses"]["main"] = raw.hex()
+        self.assertEqual(compare(left, other)["verdict"], "different")
+
     def test_compare_state_length_tags_and_unavailable_scope(self):
         left = identified_capture()
-        right = copy.deepcopy(left)
+        right = second(left)
         right["frames"][1]["state"]["machine"] += "00"
         difference = compare(left, right)["first_difference"]
         self.assertEqual((difference["reason"], difference["frame"], difference["byte_offset"]), ("state", 1, 8))
@@ -142,14 +187,14 @@ class CoreTests(unittest.TestCase):
         with self.assertRaisesRegex(LabError, "unavailable"):
             compare(left, right)
         self.assertEqual(compare(left, right, include_state=False)["verdict"], "equal")
-        right = copy.deepcopy(left)
+        right = second(left)
         right["frames"][0]["state"] = {"other": "00"}
         self.assertEqual(compare(left, right)["first_difference"]["reason"], "state-tag")
 
     def test_compare_state_hashes_and_encoding_scope(self):
         import hashlib
         left = identified_capture()
-        right = copy.deepcopy(left)
+        right = second(left)
         for capture in (left, right):
             capture["manifest"]["state_encoding"] = "sha256"
             for frame in capture["frames"]:
@@ -179,7 +224,7 @@ class CoreTests(unittest.TestCase):
 
     def test_compare_events_scope_and_first_event(self):
         left = identified_capture()
-        right = copy.deepcopy(left)
+        right = second(left)
         right["events"][1]["value"] ^= 1
         self.assertEqual(compare(left, right)["verdict"], "equal")
         difference = compare(left, right, include_events=True)["first_difference"]
@@ -187,7 +232,7 @@ class CoreTests(unittest.TestCase):
 
     def test_events_normalize_locations_preserve_semantics_and_reject_empty_scope(self):
         left = identified_capture()
-        right = copy.deepcopy(left)
+        right = second(left)
         for event in right["events"]:
             event["call_site"] = "different-engine-address"
             event["sequence"] = 123
@@ -208,13 +253,13 @@ class CoreTests(unittest.TestCase):
         right["events"][0].pop("units")
         with self.assertRaisesRegex(LabError, "units"):
             compare(left, right, include_events=True)
-        right = copy.deepcopy(left)
+        right = second(left)
         right["events"][2]["channel"] = 7
         self.assertEqual(compare(left, right, include_events=True)["verdict"], "different")
         right["events"][2].pop("channel")
         with self.assertRaisesRegex(LabError, "channel"):
             compare(left, right, include_events=True)
-        right = copy.deepcopy(left)
+        right = second(left)
         for item in (left, right):
             item["events"][1].update(mode="bounded", bound=10, value=3)
         right["events"][1]["bound"] = 11
@@ -222,7 +267,7 @@ class CoreTests(unittest.TestCase):
         right["events"][1].pop("bound")
         with self.assertRaisesRegex(LabError, "bound"):
             compare(left, right, include_events=True)
-        right = copy.deepcopy(left)
+        right = second(left)
         right["events"] = []
         with self.assertRaisesRegex(LabError, "empty"):
             compare(left, right, include_events=True)
@@ -262,7 +307,7 @@ class CoreTests(unittest.TestCase):
 
     def test_empty_common_event_kind_is_omitted_and_counts_are_per_kind(self):
         left = identified_capture()
-        right = copy.deepcopy(left)
+        right = second(left)
         for item in (left, right):
             item["events"] = [event for event in item["events"] if event["kind"] != "adc"]
         result = compare(left, right, include_events=True)

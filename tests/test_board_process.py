@@ -174,7 +174,7 @@ class BoardProcessTests(unittest.TestCase):
                 with patch('vfl.board.prepare',return_value=dict(request)):
                     path=run_board(args)
                 captures.append(load_completed_capture(path))
-        result=compare(*captures,include_events=True)
+        result=compare(*captures,include_events=True,repeat=True)
         self.assertEqual(result['verdict'],'equal')
         self.assertEqual(result['events_compared'],128)
         self.assertEqual(result['implementations']['left']['runtime_assets_sha256'],

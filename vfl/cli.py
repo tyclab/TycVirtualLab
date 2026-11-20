@@ -79,6 +79,8 @@ def parser():
     c.add_argument("right")
     c.add_argument("--rgb-only", action="store_true")
     c.add_argument("--events", action="store_true")
+    c.add_argument("--repeat", action="store_true",
+                   help="both captures come from one implementation: a repeatability check, not a comparison of two")
     c.add_argument("--unverified", action="store_true", help="explicitly compare standalone imports without completed-run verification")
     c.add_argument("--out")
     vr = sub.add_parser("verify-run", help="verify a completed run and its capture hash")
@@ -245,11 +247,14 @@ def main(argv=None):
             from .compare import compare
             from .runner import load_completed_capture
             loader = load_json if args.unverified else load_completed_capture
+            if args.repeat:
+                if Path(args.left).resolve() == Path(args.right).resolve():
+                    raise LabError("repeat comparison needs two capture files, not one file twice")
             result = compare(loader(args.left), loader(args.right),
-                             include_state=not args.rgb_only, include_events=args.events)
+                             include_state=not args.rgb_only, include_events=args.events, repeat=args.repeat)
             result["verification"] = "unverified" if args.unverified else "completed-run"
             _emit(result, args.out)
-            return 0 if result["verdict"] == "equal" else 1
+            return {"equal": 0, "different": 1}.get(result["verdict"], 3)
         elif args.command == "verify-run":
             from .runner import load_completed_capture
             from .model import digest
