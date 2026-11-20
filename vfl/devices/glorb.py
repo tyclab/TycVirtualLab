@@ -178,23 +178,25 @@ def build_profile(source, executable, ledmap, palette, *, values=None, width=20,
                "geometry": {"kind": "points", "points": points,
                             "mask": {"logical": [n >= 0 for n in mapping], "mapped": [i in present_set for i in range(count)]}}}
     if driver is not None:
-        from ..output import wled14_rgb
-        require(isinstance(driver, dict) and set(driver) == {"brightness", "limit_ma", "led_ma"}, "invalid driver options")
-        wled14_rgb(bytes(count * 3), **driver)
+        from ..output import glorb_driver
+        glorb_driver(bytes(count * 3), driver)
         backend["options"]["glorb"]["driver"] = driver
         profile["buses"].append({"id": "driver", "pixels": count, "order": "RGB", "stage": "driver"})
         profile["geometry"]["mask"]["driver"] = [i in present_set for i in range(count)]
     return validate_profile(profile)
 
 
-def prepare_repository(source_root, build_dir, *, preset=2, compiler=None, executable=None):
+def prepare_repository(source_root, build_dir, *, preset=2, compiler=None, executable=None,
+                       driver_model="wled14", driver_brightness=255):
     try:
-        return _prepare_repository(source_root, build_dir, preset=preset, compiler=compiler, executable=executable)
+        return _prepare_repository(source_root, build_dir, preset=preset, compiler=compiler, executable=executable,
+                                   driver_model=driver_model, driver_brightness=driver_brightness)
     except (KeyError, IndexError, TypeError) as error:
         raise LabError("malformed GLORB factory metadata: " + str(error)) from error
 
 
-def _prepare_repository(source_root, build_dir, *, preset=2, compiler=None, executable=None):
+def _prepare_repository(source_root, build_dir, *, preset=2, compiler=None, executable=None,
+                       driver_model="wled14", driver_brightness=255):
     root = Path(source_root).expanduser().resolve()
     source = root / "glorb/usermod/glorb_fx/glorb_fx.cpp"
     factory = root / "glorb/factory-0.14.4-GLORB.1.3"
@@ -224,13 +226,24 @@ def _prepare_repository(source_root, build_dir, *, preset=2, compiler=None, exec
               "sound_reactive": segment.get("o1", False), "palette_id": palette_id,
               "palette_blend": config.get("light", {}).get("pal-mode", 0),
               "colors": [color[:3] for color in colors]}
+    require(driver_model in ("wled14", "wled16"), "unknown RGB driver model")
+    integer(driver_brightness, "driver brightness", 0, 255)
+    led = config["hw"]["led"]
+    driver = {"brightness": driver_brightness, "limit_ma": led["maxpwr"]}
+    if driver_model == "wled16":
+        bus = buses[0]
+        require(bus.get("type", 22) == 22 and not bus.get("rev") and not bus.get("skip"),
+                "WLED 16 model requires a forward WS2812 RGB bus without skipped pixels")
+        require(led["maxpwr"] or not bus.get("maxpwr"), "per-bus WLED 16 limiting is unsupported")
+        driver.update(model=driver_model, led_ma=bus.get("ledma", 55))
+    else:
+        driver["led_ma"] = led["ledma"]
     if executable is None:
         executable = build_host(source, build_dir, compiler=compiler)["executable"]
     return build_profile(source, executable, factory / "ledmap.json",
                          expand_gradient(palx["palettes"][str(palette_id)]), values=values,
                          width=segment["stop"], height=segment["stopY"],
                          physical_pixels=buses[0]["len"],
-                         driver={"brightness": 255, "limit_ma": config["hw"]["led"]["maxpwr"],
-                                 "led_ma": config["hw"]["led"]["ledma"]},
+                         driver=driver,
                          extra_assets=(("factory-presets", factory / "presets.json"), ("factory-palettes", factory / "palx.json"),
                                        ("factory-config", factory / "cfg.json")))

@@ -77,6 +77,19 @@ class HostTests(unittest.TestCase):
         with self.assertRaisesRegex(LabError,'audio'):
             parse_output(raw.replace('1092616192','1092616193'),self.profile,self.trace(),request['request_id'],hashlib.sha256(commands.encode()).hexdigest())
 
+    def test_selected_driver_scales_mapped_bytes_and_records_state(self):
+        profile = glorb.build_profile(self.source, self.build["executable"], [0], [[0,0,0]] * 16,
+                                      width=1, height=1, driver={"model":"wled16", "brightness":45,
+                                                               "limit_ma":2800, "led_ma":55})
+        profile_path = self.root / "driver-profile.json"
+        trace_path = self.root / "driver-trace.json"
+        write_json(profile_path, profile)
+        write_json(trace_path, self.trace())
+        capture = load_completed_capture(run_capture(profile_path, trace_path, self.root / "driver-run"))
+        self.assertEqual(capture["frames"][0]["buses"], {"logical":"0a0100", "mapped":"0a0100", "driver":"030000"})
+        self.assertEqual(capture["frames"][0]["state"]["output"], "2d2d79000000f00a0000")
+        self.assertIn("output_model_sha256", capture["manifest"]["adapter_provenance"])
+
     def test_asset_change_and_unbacked_palette_selection_rejected(self):
         other=self.root/'other.cpp';other.write_text(FIXTURE+'\n')
         with self.assertRaisesRegex(LabError,'supplied renderer'):
@@ -154,6 +167,34 @@ class HostTests(unittest.TestCase):
         write_json(factory/'palx.json',{'palettes':{'1':[[0,0,0,0],[255,255,255,255]]}})
         write_json(factory/'cfg.json',{'hw':{'led':{'ins':[{'start':0,'len':120}]}},'def':{'bri':255}})
         with self.assertRaisesRegex(LabError,'brightness 255'):glorb.prepare_repository(root,self.root/'unused')
+
+    def test_prepare_wled16_uses_rgb_bus_configuration(self):
+        root = self.root / "v16-repository"
+        factory = root / "glorb/factory-0.14.4-GLORB.1.3"
+        factory.mkdir(parents=True)
+        write_json(factory / "presets.json", {"2":{"seg":[{"stop":1, "stopY":1, "fx":193, "pal":1}]}})
+        write_json(factory / "palx.json", {"palettes":{"1":[[0,0,0,0],[255,255,255,255]]}})
+        write_json(factory / "ledmap.json", {"map":[0]})
+        source = root / "glorb/usermod/glorb_fx/glorb_fx.cpp"
+        source.parent.mkdir(parents=True)
+        source.write_text(FIXTURE)
+        bus = {"len":1, "type":22, "ledma":35}
+        config = {"def":{"bri":255}, "hw":{"led":{"maxpwr":2800, "ins":[bus]}}}
+        write_json(factory / "cfg.json", config)
+        profile = glorb.prepare_repository(root, self.root / "v16-repository-build",
+                                           driver_model="wled16", driver_brightness=45)
+        self.assertEqual(profile["backend"]["options"]["glorb"]["driver"],
+                         {"model":"wled16", "brightness":45, "limit_ma":2800, "led_ma":35})
+        bus["rev"] = True
+        write_json(factory / "cfg.json", config)
+        with self.assertRaisesRegex(LabError, "forward WS2812 RGB"):
+            glorb.prepare_repository(root, self.root / "unused", driver_model="wled16")
+        bus["rev"] = False
+        bus["maxpwr"] = 500
+        config["hw"]["led"]["maxpwr"] = 0
+        write_json(factory / "cfg.json", config)
+        with self.assertRaisesRegex(LabError, "per-bus"):
+            glorb.prepare_repository(root, self.root / "unused", driver_model="wled16")
 
     def test_native_color_holes_and_sha_known_vectors(self):
         source=self.root/'helpers.cpp';binary=self.root/'helpers'

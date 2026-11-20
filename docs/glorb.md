@@ -65,21 +65,34 @@ raises an error instead of reading adjacent memory.
 
 `logical` captures the renderer's raster, `mapped` captures its permutation into
 the complete configured bus, and optional `driver` captures an explicit output
-model. Factory preparation enables the WLED 0.14 RGB current-limit/brightness
-model at internal brightness 255. The captured `output` state records requested
-and limited brightness, estimated current and configured limit. This model keeps
-renderer feedback separate from output scaling and does not claim to execute the
-original bus driver or electrical transport.
-Factory preparation requires preset/default brightness 255 and brightness scale
-100; other factory brightness settings fail instead of being silently ignored.
+model. Factory preparation defaults to WLED 0.14 at internal brightness 255.
+For a source renderer running on a WLED 16 port, choose the driver and bus
+brightness when preparing the profile:
 
-No whole-frame gamma is applied in that WLED 0.14 stage. Palette/color gamma and
-user-slider conversion are upstream operations; the driver's brightness parameter
-is already the internal bus value. The [WLED 0.14 output implementation](https://github.com/wled/WLED/blob/v0.14.4/wled00/FX_fcn.cpp)
-and [bus wrapper](https://github.com/wled/WLED/blob/v0.14.4/wled00/bus_wrapper.h)
-identify the current-estimation and luminance boundaries. Frame output at lowered
-brightness is a model and does not include lossy bus-buffer readback or timed
-crossfades.
+```sh
+tycvl device prepare glorb --source-root "$SOURCE" --build-dir "$BUILD" --preset 11 \
+  --driver-model wled16 --driver-brightness 45 --out "$PROFILE"
+```
+
+The WLED 16.0.1 model covers one ESP32-S3 RGB bus. Each frame writes all pixels
+once after mapping. The digital driver scales each color with the video form of
+`color_fade`. Global automatic brightness limiting estimates current from those
+scaled bytes and can apply another video fade. A zero limit represents disabled
+limiting. Per-bus limiting, WS2815 current estimation and RGBW require other
+models. The capture's `output` state packs requested and effective brightness
+(two uint8 values), estimated current and the configured limit (two little-endian
+uint32 values). The controller allowance in the WLED 16 estimate is 120 mA.
+[WLED 16 color arithmetic](https://github.com/wled/WLED/blob/v16.0.1/wled00/colors.cpp)
+and [digital bus](https://github.com/wled/WLED/blob/v16.0.1/wled00/bus_manager.cpp).
+
+For both versions, color gamma and conversion from user to internal brightness
+happen upstream. A chip recording used for comparison must have matching gamma
+or supply equivalently corrected RGB. The supplied factory metadata still
+requires preset/default brightness 255 and brightness scale 100. An explicit
+`--driver-brightness` changes the output stage for the run. Feedback uses the
+renderer buffer. Lossy bus readback, timed crossfades and electrical transport
+are outside this model. [WLED 0.14 output](https://github.com/wled/WLED/blob/v0.14.4/wled00/FX_fcn.cpp)
+and [bus wrapper](https://github.com/wled/WLED/blob/v0.14.4/wled00/bus_wrapper.h).
 
 Original-machine-code comparison remains distinct from the host's
 `recovered-code` classification. Running every factory preset proves those source
