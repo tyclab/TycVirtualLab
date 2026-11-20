@@ -26,7 +26,7 @@ class HyperCubeSetupTests(unittest.TestCase):
         self.rom.write_bytes(bytes(65536))
 
     def profile(self, **kwargs):
-        with patch.object(cube, "_verify_elf", return_value=(self.elf, file_digest(self.elf))), patch.object(cube, "ROM_SHA256", file_digest(self.rom)):
+        with patch.object(cube, "_verify_elf", return_value=(self.elf, file_digest(self.elf))), patch.dict(cube.ROM_SOURCES, {file_digest(self.rom): "Authored test ROM."}):
             return cube.build_profile(self.elf, self.rom, **kwargs)
 
     def trace(self, controls=None):
@@ -78,6 +78,16 @@ class HyperCubeSetupTests(unittest.TestCase):
             with self.subTest(settings=settings), self.assertRaises(LabError):
                 self.profile(settings=settings)
 
+    def test_rom_digest_labels_the_run_and_unknown_assets_are_rejected(self):
+        with patch.object(cube, "_verify_elf", return_value=(self.elf, file_digest(self.elf))):
+            with self.assertRaisesRegex(LabError, "unrecognized ESP8266 ROM"):
+                cube.build_profile(self.elf, self.rom)
+        profile = self.profile()
+        rom = next(asset for asset in profile["firmware"] if asset["role"] == "rom")
+        self.assertEqual(rom["sha256"], file_digest(self.rom))
+        self.assertIn("Authored test ROM.", profile["metadata"]["limitations"])
+        self.assertIn("Authored test ROM.", profile["backend"]["options"]["device"]["limitations"])
+
     def test_control_changes_compile_into_bound_original_calls(self):
         trace = self.trace({1: {"fx": 124, "ix": 0}, 2: {"warp": True, "palette": 4}})
         profile = self.profile(settings={"boot_stage": "effect"}, trace=trace)
@@ -125,12 +135,14 @@ class HyperCubeSetupTests(unittest.TestCase):
         from vfl.model import load_json
         out = Path(self.temp.name) / "campaign"
         with patch.object(cube, "_verify_elf", return_value=(self.elf, file_digest(self.elf))), \
-             patch.object(cube, "ROM_SHA256", file_digest(self.rom)), \
+             patch.dict(cube.ROM_SOURCES, {file_digest(self.rom): "Authored test ROM."}), \
              patch("vfl.runner.run_process", side_effect=LabError("runner interrupted by SIGTERM")) as process:
             with self.assertRaisesRegex(LabError, "interrupted"):
                 cube.run_coverage(self.elf, self.rom, out, case_ids=["fx-5", "fx-6"], batch_size=1, headless=sys.executable)
         self.assertEqual(process.call_count, 1)
-        self.assertEqual(load_json(out / "campaign.json")["status"], "interrupted")
+        campaign = load_json(out / "campaign.json")
+        self.assertEqual(campaign["status"], "interrupted")
+        self.assertIn("Authored test ROM.", campaign["limitations"])
         self.assertFalse((out / "batch-001").exists())
         # Default coverage gives original startup time to elapse; the ordinary
         # trace helper keeps its separate32ms cadence for dense scenarios.
