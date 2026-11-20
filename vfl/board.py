@@ -20,6 +20,9 @@ from .runner import _source_fingerprint, inherited_resource_lock_fds, run_proces
 from .firmware import inspect_image
 
 
+WATCHDOG_LIMITATION = "The timer-group watchdogs are switched off in QEMU (timer.esp32.timg wdt_disable): a stall that resets a lamp does not reset this run."
+
+
 def add_parser(sub):
     p = sub.add_parser("board", help="boot an Exoy flash copy in QEMU and capture actual driver frames")
     p.add_argument("device", choices=["exoy-one"])
@@ -108,7 +111,7 @@ def prepare(args):
             integer(value, "ADC sample", 0, 4095)
     seed = args.seed if args.seed is not None else (trace["seed"] if args.input else 1)
     return {"schema": "tycvl.board.request.v1", "request_id": secrets.token_hex(16), "tool_version": __version__,
-            "device": "exoy-one-v2-1", "assets": assets, "library_paths": libraries,
+            "report_version": 2, "device": "exoy-one-v2-1", "assets": assets, "library_paths": libraries,
             "app_entrypoint": image["entry_point"], "loaded_app_checks": loaded_checks,
             "packets": packets, "input_provenance": provenance, "seed": seed,
             "settings": {"pack": args.pack, "effect": args.effect}, "boot_mic": args.mic,
@@ -281,7 +284,7 @@ def _normalize(request, observations):
         "boot":{"skipped_show_frames":boot_frames,"wifi_failures":wifi_failures},
         "limitations":["Boots a private copy of supplied flash, including its SDK bootloader and persisted settings; these need not be the physical lamp's boot assets.",
          "IPC stall handshake, ADC channel6, offline WiFi failure and RMT send are explicit debugger hardware stand-ins.",
-         "The timer-group watchdogs are switched off in QEMU (timer.esp32.timg wdt_disable): a stall that resets a lamp does not reset this run.",
+         WATCHDOG_LIMITATION,
          "Packet i belongs to scene/output frame i; zero-read frames discard their packet. Source PCM timestamps do not drive QEMU's clock or establish physical ADC acquisition spacing.",
          "Display timestamps convert observed CCOUNT using the declared frequency; this is a QEMU observation, not measured silicon timing.",
          "ADC and WiFi stand-ins consume no simulated conversion/attempt time; only the RMT stand-in invokes the declared ROM delay.",
@@ -294,7 +297,14 @@ def _normalize(request, observations):
 def verify_completed(directory, request, status, capture):
     require(status.get("schema") == "tycvl.board.status.v1" and status.get("request_sha256") == digest(request), "board request changed")
     require(status.get("frames") == len(capture["frames"]) and status.get("execution_kind") == "original-firmware", "board completion differs")
+    version = request.get("report_version")
+    require(version is None or (type(version) is int and version == 2), "unknown board report version")
     expected = normalize(request, load_json(Path(directory)/"board-observations.json"))
+    if version is None and "execution_scope" not in capture["manifest"]:
+        # Historical reports have the same observations but predate one or both disclosures.
+        expected["manifest"].pop("execution_scope")
+        if WATCHDOG_LIMITATION not in capture["manifest"]["limitations"]:
+            expected["manifest"]["limitations"].remove(WATCHDOG_LIMITATION)
     require(digest(expected) == digest(capture), "board capture differs from bound observations")
     return capture
 

@@ -97,7 +97,7 @@ def parse_output(text, profile, trace, nonce, command_hash):
         if source.get("controls"):
             events.append({"kind": "control", "frame": source["index"], "time_us": source["time_us"], "values": source["controls"]})
     result = {"schema": "vfl.capture.v1", "manifest": {"profile_id": profile["id"],
-              "execution_kind": "recovered-code", "backend": "glorb-host-v1", "request_id": nonce,
+              "execution_kind": "recovered-code", "execution_scope": "host-renderer", "backend": "glorb-host-v1", "request_id": nonce,
               "engine": {"name": "native-cpp", "renderer": "externally-supplied-glorb-source", "version": "1"},
               "capabilities": {"adc_log": False, "clock_log": False, "rng_log": False, "state": True},
               "protocol_binding": {"request_id": nonce, "commands_sha256": command_hash},

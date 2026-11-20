@@ -25,6 +25,7 @@ def policy_for(profile):
 def record_input_evidence(profile, trace, capture):
     config = profile["backend"]["options"]["ghidra"]
     events = [e for e in capture["events"] if e["frame"] >= 0]
+    capture["manifest"]["execution_scope"] = "routine-diagnostic"
     capture["manifest"]["clock"] = {"source": "scheduled-frame-time", "frame_clock_reads":
                                       sum(e["kind"] == "clock" for e in events)}
     policy = policy_for(profile)

@@ -321,7 +321,7 @@ def _collect_coverage_case(profile, trace, commands, output, output_tags, state_
     if encoding == "sha256":
         for frame in capture["frames"]:
             frame["state"] = {tag: hashlib.sha256(bytes.fromhex(raw)).hexdigest() for tag, raw in frame["state"].items()}
-    capture["manifest"].update(execution_scope="routine-diagnostic", request_id=nonce, input_sha256=digest(trace), profile_sha256=digest(profile),
+    capture["manifest"].update(request_id=nonce, input_sha256=digest(trace), profile_sha256=digest(profile),
         experiment_sha256=experiment_digest(profile, trace), state_encoding=encoding,
         adapter_provenance={**provenance, "execution_metadata": execution, "read_counts": read_counts,
                             "commands_sha256": hashlib.sha256(commands.encode()).hexdigest(), "output_sha256": file_digest(output),
