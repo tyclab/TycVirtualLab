@@ -66,7 +66,7 @@ python3 -m vfl profiles
 python3 -m vfl generate --kind music-noise --frames 300 --out ../TycVirtualLab-private/input.json
 python3 -m vfl run hypercube-demo ../TycVirtualLab-private/input.json --out ../TycVirtualLab-private/run-a
 python3 -m vfl run hypercube-demo ../TycVirtualLab-private/input.json --out ../TycVirtualLab-private/run-b
-python3 -m vfl compare ../TycVirtualLab-private/run-a/capture.json ../TycVirtualLab-private/run-b/capture.json --events
+python3 -m vfl compare ../TycVirtualLab-private/run-a/capture.json ../TycVirtualLab-private/run-b/capture.json --events --repeat
 python3 -m vfl view ../TycVirtualLab-private/run-a/capture.json --out ../TycVirtualLab-private/viewer.html
 ```
 
@@ -150,6 +150,17 @@ hash recorded by the runner. Either a run directory or its `capture.json` may be
 supplied. `verify-run` performs that integrity check separately. Standalone
 captures and raw imports require `compare --unverified`; that result is labeled
 unverified and cannot establish that a run completed successfully.
+
+The verdict is `different`, `equal` or `inconclusive` (exit codes 1, 0, 3). `equal` is
+given only when the comparison carries information: at least one frame has light in
+it, the two captures come from two implementations (backend, tool version, tool
+source or runtime assets differ), and no side logged reads of an input (`adc`,
+`clock`, `rng`) that the other, able to log them, never read. Otherwise the verdict
+is `inconclusive` with its reasons (`no-frames`, `all-black`, `same-capture`,
+`same-implementation`, `input-use-adc`, ...). Two runs of one implementation are a
+repeatability check and must be declared with `--repeat`; `equal` then says only
+that the implementation repeats itself. Every report carries the counts it rests on
+(`information`: frames, frames with light, distinct frames, reads per side).
 
 A match is conditional on the supplied inputs and initialization. It does not
 establish a real microphone response, electrical integrity, wall-clock scheduling,

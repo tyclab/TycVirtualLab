@@ -40,9 +40,15 @@ class CliTests(unittest.TestCase):
             self.cli("run", "hypercube-demo", trace, "--out", self.directory / name)
         first = self.directory / "one" / "capture.json"
         second = self.directory / "two" / "capture.json"
-        equal = self.cli("compare", first, second, "--events")
+        equal = self.cli("compare", first, second, "--events", "--repeat")
         self.assertEqual(json.loads(equal.stdout)["verdict"], "equal")
         self.assertEqual(json.loads(equal.stdout)["verification"], "completed-run")
+        # the same two runs without the declaration: no difference, but nothing shown about a second implementation
+        undeclared = self.cli("compare", first, second, "--events", expected=3)
+        self.assertEqual(json.loads(undeclared.stdout)["verdict"], "inconclusive")
+        self.assertIn(json.loads(undeclared.stdout)["inconclusive_reasons"][0], ("same-capture", "same-implementation"))
+        once = self.cli("compare", first, first, "--repeat", expected=2)
+        self.assertIn("two capture files", once.stderr + once.stdout)
         self.cli("verify-run", first.parent)
         changed = load_json(second)
         bus = changed["buses"][0]["id"]

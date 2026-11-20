@@ -64,7 +64,10 @@ Runs longer than one counter wrap between consecutive outputs cannot resolve the
 number of wraps; keep captures dense and inspect observed timing.
 
 The fixed hardware boundaries are the IPC stall handshake, GPIO34/ADC channel 6,
-an offline WiFi-initialization failure, and RMT transmission. At RMT output the
+an offline WiFi-initialization failure, and RMT transmission. The timer-group
+watchdogs are switched off in QEMU (`timer.esp32.timg` `wdt_disable`), so a stall
+that would reset a lamp does not reset the run; every capture says so in its
+limitations. At RMT output the
 adapter captures bytes, then invokes the original ROM delay for the modeled
 14400 microsecond transfer. It does not synthesize effect pixels. Startup output
 frames before the first scene are counted separately. ADC and WiFi stand-ins

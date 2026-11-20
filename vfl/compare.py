@@ -28,7 +28,39 @@ def _normalized_events(capture, kinds):
     return result
 
 
-def compare(left, right, *, include_state=True, include_events=False):
+def _information(left, right, implementations):
+    """What an equal result would rest on, and the reasons it would carry no information.
+
+    An equal comparison shows something only if there were frames with light in them, the two sides are two
+    implementations (or the caller declares a repeat of one), and no side used an input the other never read.
+    """
+    buses = [bus["id"] for bus in left["buses"]]
+    contents = [tuple(frame["buses"][name] for name in buses) for frame in left["frames"]]
+    lit = sum(1 for content in contents if any(value.strip("0") for value in content))
+    input_use = {}
+    for kind in ("adc", "clock", "rng"):
+        if left["manifest"]["capabilities"][kind + "_log"] and right["manifest"]["capabilities"][kind + "_log"]:
+            input_use[kind] = {side: sum(1 for event in capture["events"] if event["kind"] == kind)
+                               for side, capture in (("left", left), ("right", right))}
+    same_capture = digest(left) == digest(right)
+    same_implementation = implementations["left"] == implementations["right"]
+    reasons = []
+    if not contents:
+        reasons.append("no-frames")
+    elif not lit:
+        reasons.append("all-black")
+    if same_capture:
+        reasons.append("same-capture")
+    elif same_implementation:
+        reasons.append("same-implementation")
+    for kind, counts in input_use.items():
+        if bool(counts["left"]) != bool(counts["right"]):
+            reasons.append("input-use-" + kind)
+    return {"frames": len(contents), "lit_frames": lit, "distinct_frames": len(set(contents)),
+            "same_capture": same_capture, "same_implementation": same_implementation, "input_use": input_use}, reasons
+
+
+def compare(left, right, *, include_state=True, include_events=False, repeat=False):
     validate_capture(left)
     validate_capture(right)
     lm, rm = left["manifest"], right["manifest"]
@@ -112,5 +144,17 @@ def compare(left, right, *, include_state=True, include_events=False):
             base["events_compared_by_kind"][a["kind"]] += 1
         if len(left_events) != len(right_events):
             return different("event", event_index=base["events_compared"])
+    information, reasons = _information(left, right, base["implementations"])
+    if repeat:
+        # A declared repeat of one implementation: equal means it repeats, nothing about a second implementation.
+        require(information["same_implementation"], "repeat comparison requested but the implementations differ")
+        # Two runs of a deterministic implementation give the same capture: that is the expected result here.
+        reasons = [reason for reason in reasons if reason not in ("same-capture", "same-implementation")]
+    base = dict(base, information=information, relation="repeat" if repeat else "two-implementations")
+    if reasons:
+        return dict(base, verdict="inconclusive", first_difference=None, inconclusive_reasons=reasons,
+                    interpretation="No difference found, but the comparison carries no information: " + ", ".join(reasons) + ".")
     return dict(base, verdict="equal", first_difference=None,
-                interpretation="Equal for these declared inputs, snapshots and comparison scope; not a proof of physical equivalence.")
+                interpretation=("The implementation repeats itself for these declared inputs and comparison scope."
+                                if repeat else
+                                "Equal for these declared inputs, snapshots and comparison scope; not a proof of physical equivalence."))
