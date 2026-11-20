@@ -16,7 +16,12 @@ from ..model import LabError, compatible_input, file_digest, integer, private_pa
 
 REVISION = "hs-2.2"
 APP_SHA256 = "b2f8ddabe7139f8f35d02c0716838b13c167ba449def5954d605b716442986dc"
-ROM_SHA256 = "761fa92b557e1aa195be4f00faaec776ad1ecae95f71b88da82938e8af3a076a"
+ROM_SOURCES = {
+    "761fa92b557e1aa195be4f00faaec776ad1ecae95f71b88da82938e8af3a076a":
+        "This run uses the historical, partial ESP8266 ROM reconstruction from a disassembly.",
+    "32f199bf10da9a08c6c4e1b556b29c7606656b8a6d04e4f17d5afa74e5d98c68":
+        "This run uses the public ESP8266 reference ROM. Its identity with the physical controller remains unverified.",
+}
 # Load addresses, lengths and content hashes identify this revision independently
 # of ELF container metadata or symbols. No segment contents are distributed.
 SEGMENTS = (
@@ -367,7 +372,9 @@ def build_profile(elf, rom, *, settings=None, trace=None, headless=None, limiter
     program, program_sha = _verify_elf(elf)
     rom_path = Path(rom).expanduser().resolve(strict=True)
     require(rom_path.is_file(), "ESP8266 ROM must be a regular file")
-    require(file_digest(rom_path) == ROM_SHA256, "ESP8266 ROM differs from supported original ROM dump")
+    rom_sha = file_digest(rom_path)
+    require(rom_sha in ROM_SOURCES, "unrecognized ESP8266 ROM SHA256")
+    limits = [*device_info()["limitations"], ROM_SOURCES[rom_sha]]
     integer(timeout_s, "timeout_s", 30, 86400)
     require(state_encoding in {"bytes", "sha256"}, "unknown state encoding")
     hooks = []
@@ -403,7 +410,7 @@ def build_profile(elf, rom, *, settings=None, trace=None, headless=None, limiter
               "hold_files": [str(Path(path).expanduser().absolute()) for path in hold_files]}
     if headless is not None: config["headless"] = str(Path(headless).expanduser().resolve(strict=True))
     assets = [{"role": "elf", "format": "elf", "path": str(program), "sha256": program_sha},
-              {"role": "rom", "path": str(rom_path), "sha256": ROM_SHA256}]
+              {"role": "rom", "path": str(rom_path), "sha256": rom_sha}]
     if limiter is not None:
         limit_path = Path(limiter).expanduser().resolve(strict=True)
         require(limit_path.is_file(), "resource limiter must be a regular file")
@@ -431,7 +438,7 @@ def build_profile(elf, rom, *, settings=None, trace=None, headless=None, limiter
             # preserve the narrower engine boundary for comparison compatibility.
             config["frame_calls"].insert(0, _call(0x402057c8))
     profile = {"schema": "vfl.profile.v1", "id": "hypercube-hs22", "target": device_info()["target"],
-               "metadata": {"limitations": device_info()["limitations"]},
+               "metadata": {"limitations": limits},
                "description": "HyperCube hs-2.2 original application/engine with explicit virtual peripheral boundaries",
                "input": copy.deepcopy(INPUT), "geometry": {"kind": "strips"}, "settings": s,
                "buses": [{"id": name, "pixels": 144, "order": "GRB", "stage": "driver"} for name in ("driver-a", "driver-b")],
@@ -440,7 +447,7 @@ def build_profile(elf, rom, *, settings=None, trace=None, headless=None, limiter
                    "env": {"PYTHONPATH": str(Path(__file__).resolve().parents[2])},
                    "options": {"ghidra": config, "device": {"id": "hypercube", "revision": REVISION,
                        "startup_stage": s["boot_stage"], "boundaries": device_info()["boundaries"],
-                       "limitations": device_info()["limitations"]}}}}
+                       "limitations": limits}}}}
     return validate_profile(profile)
 
 
@@ -487,7 +494,7 @@ def _collect_coverage_case(profile, trace, commands, output, output_tags, state_
             and output.stat().st_size <= config["output_limit"], "missing or oversized coverage output")
     capture = capture_from_output(profile, trace, commands, output.read_text(), output_tags,
         state_tag_map=state_tags, request_id=nonce, execution_kind="original-firmware", backend="ghidra-pcode",
-        limitations=device_info()["limitations"] + [
+        limitations=profile["metadata"]["limitations"] + [
             "Campaign cases have protocol/nonce/asset/source validation, not the outer runner's completed-run status envelope.",
             "Each case starts a fresh emulator, original static initialization and application setup within a shared imported Ghidra Program."])
     engine = capture["manifest"].get("engine", {})
@@ -561,7 +568,8 @@ def run_coverage(elf, rom, output_dir, *, case_ids=None, trace=None, frames=20, 
         assets = _asset_paths(profile)
         commands, output_tags, state_tags = compile_commands(profile, trace, assets)
         compiled.append((case, profile, assets, commands, output_tags, state_tags))
-    config = compiled[0][1]["backend"]["options"]["ghidra"]
+    first_profile = compiled[0][1]
+    config = first_profile["backend"]["options"]["ghidra"]
     executable = config.get("headless") or os.environ.get("GHIDRA_HEADLESS") or shutil.which("ghidra-analyzeHeadless")
     require(isinstance(executable, str) and Path(executable).is_file(), "configure Ghidra headless")
     for path in config["hold_files"]:
@@ -586,7 +594,7 @@ def run_coverage(elf, rom, output_dir, *, case_ids=None, trace=None, frames=20, 
     summary = {"schema": "tycvl.device-coverage.v1", "device": "hypercube", "revision": REVISION,
                "status": "running", "validation_scope": "original execution with protocol/nonce/asset/source validation",
                "fidelity": "not-evaluated", "completed_run_envelope": False, "input_sha256": digest(trace), "frames_per_case": len(trace["frames"]),
-               "runtime_sha256": source_pins, "cases": [], "limitations": device_info()["limitations"]}
+               "runtime_sha256": source_pins, "cases": [], "limitations": first_profile["metadata"]["limitations"]}
     write_json(out / "campaign.json", summary)
     for group_start in range(0, len(compiled), batch_size):
         group = compiled[group_start:group_start + batch_size]

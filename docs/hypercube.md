@@ -4,6 +4,8 @@ The HyperCube adapter executes the supplied ESP8266 application's original Xtens
 
 The supported revision is identified by all five loaded segment hashes. An ELF may have different container metadata, but its loaded guest bytes must match. The separately supplied ESP8266 ROM is also pinned. Unsupported revisions fail before execution; selecting a similar version does not authorize reusing these addresses.
 
+The profile records which ROM supplied the runtime routines. Both supported files are 65,536 bytes. Earlier runs used a partial reconstruction from a disassembly (`761fa92b557e1aa195be4f00faaec776ad1ecae95f71b88da82938e8af3a076a`). The public reference image has SHA256 `32f199bf10da9a08c6c4e1b556b29c7606656b8a6d04e4f17d5afa74e5d98c68`. Its match to a particular controller's mask ROM remains unverified. [Reference image at the pinned revision](https://github.com/gschorcht/qemu-xtensa/blob/afdb2baa7a0779a07186a93f8e95f5be2d6c86d0/pc-bios/esp8266.rom)
+
 ## Prepare and run
 
 Keep images, profiles and runs outside this source checkout. Supply either an ELF or the standalone E9 application image. A merged flash dump is deliberately not accepted by the image preparation command.
