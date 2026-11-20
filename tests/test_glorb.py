@@ -90,6 +90,21 @@ class HostTests(unittest.TestCase):
         with self.assertRaisesRegex(LabError,'palette zero'):
             glorb.settings({'palette_id':0})
 
+    def test_effect_clock_can_reset_while_uptime_continues(self):
+        source = self.root / 'clock.cpp'
+        source.write_text(FIXTURE.replace('RGBW32(level,SEGENV.step,0,0)',
+                                          'RGBW32(millis(),strip.now,SEGMENT.hasRGB(),0)'))
+        binary = glorb.build_host(source, self.root / 'clock-build')['executable']
+        profile = glorb.build_profile(source, binary, [0], [[0,0,0]] * 16, width=1, height=1)
+        trace = self.trace()
+        trace['frames'][2]['controls'] = {'effect_time_ms': 0}
+        profile_path, trace_path = self.root/'clock-profile.json', self.root/'clock-trace.json'
+        write_json(profile_path, profile)
+        write_json(trace_path, trace)
+        result = load_completed_capture(run_capture(profile_path, trace_path, self.root/'clock-run'))
+        self.assertEqual([frame['buses']['mapped'] for frame in result['frames']],
+                         ['000001', '101001', '200001', '301001'])
+
     def test_host_abi_and_large_mask_are_explicit(self):
         abi=self.build['host_abi']
         self.assertEqual(abi['int_bits'],32)
@@ -150,6 +165,9 @@ int main() {
  assert(tyc_sha256("")=="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
  assert(tyc_sha256("abc")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
  assert(tyc_scale8(255,255)==255 && tyc_scale8(255,0)==0);
+ TycPalette palette{};
+ palette[14]=0x080000; palette[15]=0x180000;
+ assert(ColorFromPalette(palette,255,255,LINEARBLEND_NOWRAP)==0x160000);
  assert(color_add(0xfff000,0x201001,true)==0xffff01);
  assert(color_add(0xfff000,0x201001,false)==0xffe300);
  assert(color_add(0x241420,0x102030)==0x343450);

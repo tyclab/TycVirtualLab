@@ -25,7 +25,9 @@ inline unsigned tyc_width=20,tyc_height=6,tyc_physical=83;
 inline uint8_t paletteBlend=0;
 inline float tyc_volume=0;
 inline unsigned tyc_audio_reads=0;
-enum TBlendType { NOBLEND, LINEARBLEND };
+enum TBlendType { NOBLEND, LINEARBLEND, LINEARBLEND_NOWRAP };
+inline uint32_t tyc_uptime_ms = 0;
+inline uint32_t millis() { return tyc_uptime_ms; }
 
 inline uint8_t tyc_scale8(uint8_t value,uint8_t factor) {
   return uint16_t(value)*(uint16_t(factor)+1)>>8;
@@ -40,6 +42,7 @@ inline uint32_t color_add(uint32_t a,uint32_t b,bool fast=false) {
 }
 
 inline uint32_t ColorFromPalette(const TycPalette &pal,uint8_t index,uint8_t brightness,TBlendType blend) {
+  if (blend == LINEARBLEND_NOWRAP) index = (uint16_t(index) * 240) >> 8;
   const uint32_t a=pal[index>>4],b=pal[((index>>4)+1)&15];
   const unsigned fraction=(index&15)<<4;
   uint8_t channels[3]={R(a),G(a),B(a)};
@@ -62,6 +65,7 @@ struct Segment {
   uint16_t aux0=0,aux1=0;
   std::array<uint32_t,3> colors{};
   bool is2D() const {return tyc_height>1;}
+  bool hasRGB() const {return true;}  // This adapter accepts RGB buses only.
   uint32_t getPixelColorXY(int x,int y) const {
     if (x<0||y<0||unsigned(x)>=tyc_width||unsigned(y)>=tyc_height) return 0;
     const size_t i=size_t(y)*tyc_width+x;

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .devices.glorb import INPUT, NAMES, palette_rgb16, settings
-from .model import (LabError, canonical, compatible_input, digest, experiment_digest, file_digest,
+from .model import (LabError, canonical, compatible_input, digest, experiment_digest, file_digest, integer,
                     load_json, private_path, require, validate_capture, validate_profile, validate_trace)
 from .runner import run_process
 
@@ -46,7 +46,11 @@ def compile_commands(profile, trace, nonce):
              "layout " + " ".join(map(str, [width, height, count, *mapping])),
              "palette " + " ".join(str(v) for color in palette for v in color)]
     for frame in trace["frames"]:
-        controls = frame.get("controls", {})
+        controls = dict(frame.get("controls", {}))
+        clock_command = ""
+        if "effect_time_ms" in controls:
+            effect_time = integer(controls.pop("effect_time_ms"), "effect_time_ms", 0, 2**31 - 1)
+            clock_command = f" {effect_time}"
         require(set(controls) <= set(values), "unsupported GLORB control")
         require("palette_id" not in controls or controls["palette_id"] == profile["settings"]["palette_id"],
                 "palette selection requires its actual table; prepare a profile for that palette")
@@ -55,7 +59,7 @@ def compile_commands(profile, trace, nonce):
         args = [NAMES.index(values["effect"]), *(values[k] for k in ("speed", "intensity", "custom1", "custom2", "custom3")),
                 int(values["sound_reactive"]), values["palette_blend"], values["palette_id"], *packed]
         lines.append("settings " + " ".join(map(str, args)))
-        lines.append(f"frame {frame['index']} {frame['time_us']} {frame['values'][0]:.17g}")
+        lines.append(f"frame {frame['index']} {frame['time_us']} {frame['values'][0]:.17g}{clock_command}")
     encoded = "\n".join(lines) + "\n"
     require(len(encoded.encode()) <= 8 * 1024 * 1024, "GLORB command limit exceeded")
     require(len(trace["frames"]) * ((width * height + count) * 6 + 160) < 128 * 1024 * 1024,
