@@ -99,6 +99,7 @@ int main(int argc,char **argv) {
     ensure(strip.effects.size()==6,"unsupported renderer registration count");
     for(unsigned i=0;i<6;++i)ensure(strip.names[i].rfind(expected[i],0)==0,"unsupported renderer registration order");
     unsigned effect=0,frames=0;uint64_t previous=0;bool layout=false,settings=false,palette=false;
+    uint32_t timebase = 0;
     while(std::getline(commands,line)) {
       ensure(!line.empty(),"empty command");std::istringstream row(line);std::string op;row>>op;
       if(op=="layout") {
@@ -127,7 +128,11 @@ int main(int argc,char **argv) {
         const auto index=number(row,1000000),timestamp=number(row,std::numeric_limits<uint64_t>::max());
         ensure(index==frames&&(!frames||timestamp>previous),"nonmonotonic frame");
         double volume;ensure(bool(row>>volume)&&std::isfinite(volume)&&volume>=0&&volume<=65535,"invalid volume");
-        tyc_volume=float(volume);tyc_audio_reads=0;strip.now=uint32_t(timestamp/1000);
+        tyc_volume=float(volume);tyc_audio_reads=0;
+        tyc_uptime_ms = uint32_t(timestamp / 1000);
+        row >> std::ws;
+        if (!row.eof()) timebase = uint32_t(number(row, INT32_MAX)) - tyc_uptime_ms;
+        strip.now = tyc_uptime_ms + timebase;
         strip.effects.at(effect)();++SEGMENT.call;
         std::vector<uint32_t> physical(tyc_physical,0);
         for(size_t i=0;i<tyc_map.size();++i)if(tyc_map[i]>=0)physical[tyc_map[i]]=tyc_pixels[i];

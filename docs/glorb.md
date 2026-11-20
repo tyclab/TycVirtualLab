@@ -51,6 +51,12 @@ Frame controls accept partial updates to effect, speed, intensity, custom1/2/3,
 colors, palette blend and sound-reactive toggle. Effect changes reset segment
 history. A different palette requires its actual table in a new profile. There is
 no implicit random palette lookup or synthetic microphone fallback.
+The source adapter derives device uptime (`millis()`) from trace timestamps.
+The `effect_time_ms` frame control sets WLED's effect clock (`strip.now`) to
+the given millisecond value at that frame, as the WLED JSON `tb` command does.
+Subsequent frames retain this offset while uptime continues. A value of zero
+replays the clock reset on power-on. On/off transitions and fades still need
+their own measurements.
 Palette 0 is rejected because its color-gamma and video-scaling path is not
 modeled. Only audio slot 0 is available; accessing another AudioReactive slot
 raises an error instead of reading adjacent memory.
