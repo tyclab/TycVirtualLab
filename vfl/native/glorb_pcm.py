@@ -39,20 +39,30 @@ def word(address, value):
 
 
 def measure(job):
-    factory = job['factory']
+    application = job['application']
+    factory = application == 'GLORB.1.3'
     if factory:
         call, driver, returned, peak_store, fft_done = 0x4204159c, 0x42040e48, 0x42041112, 0x420411d3, 0x42041214
         vtable, flag, history, low, peak = 0x3c1662e0, 0x3fca1184, 0x3fca00b0, 0x3fca00ac, 0x3fca1180
         real, imag, activity, mag, hz = 0x3fca08d8, 0x3fca00d8, 0x3fca117c, 0x3fca1168, 0x3fc992b8
         fft_object, constructor = 0x3fca00b8, 0x4204773d
     else:
-        call, driver, returned, peak_store, fft_done = 0x420030d4, 0x42002a53, 0x42002d2a, 0x42002de3, 0x42002e39
-        vtable, flag, history, low, peak = 0x3c0f0910, 0x3fc9ae14, 0x3fc9ad88, 0x3fc9ad84, 0x3fc9ae4c
+        if application in ('fleet 2611200', 'fleet 2611201'):
+            call, driver, returned, peak_store, fft_done = 0x420030d4, 0x42002a53, 0x42002d2a, 0x42002de3, 0x42002e39
+            constructor = 0x42002cf1
+        elif application == 'fleet 2611202':
+            call, driver, returned, peak_store, fft_done = 0x420030f4, 0x42002a73, 0x42002d4a, 0x42002e03, 0x42002e59
+            constructor = 0x42002d11
+        else:
+            raise RuntimeError(f'No GLORB audio layout for {application}')
+        vtable = 0x3c0f0910
         real, imag = 0x3fcb9000, 0x3fcba000
         def literal(address):
             return struct.unpack('<I', memory(address, 4))[0]
         activity, mag, hz = (literal(a) for a in (0x420000b4, 0x420000c0, 0x420000c4))
-        fft_object, constructor = number('$a1') + 32, 0x42002cf1
+        # Each fleet FFT task loads these globals from its mapped literal pool.
+        flag, history, low, peak = (literal(a) for a in (0x42000090, 0x42000094, 0x42000098, 0x420000b0))
+        fft_object = number('$a1') + 32
         word(literal(0x42000024), real)
         word(literal(0x42000080), imag)
     reader = 0x3fcb8000

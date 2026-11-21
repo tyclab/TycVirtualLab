@@ -15,6 +15,7 @@ APPLICATIONS = {
     'ba2decaae3c39ecb4ae4634c4d361d9f65faff67df4d2d2c87fefa68be4dcc79': 'GLORB.1.3',
     'e73a39c5be534d49d138ae5909f3e12857e013a7640afbb275fdcfd6d7092857': 'fleet 2611200',
     '7305917cd59da0102d7248d836f1d12030d5ab364a5d139504ae32f124fb53d4': 'fleet 2611201',
+    '0f5f59f8eda14d41b5194e12e13f240d8ced449e490cb07036ec683ba768b27e': 'fleet 2611202',
 }
 CASES = [(label + suffix, k, amp, active, 'complete')
          for label, k, amp in [('near-cutoff', 2, 8192), ('soft', 16, 257)]
@@ -46,7 +47,7 @@ def measure(image, boot, qemu, gdb, rom_dir, timeout_s):
     with tempfile.TemporaryDirectory() as scratch:
         tmp = Path(scratch)
         (tmp/'flash.bin').write_bytes(flash_image(boot, app))
-        (tmp/'job.json').write_text(json.dumps(dict(entry=info['entry_point'], factory=name=='GLORB.1.3',
+        (tmp/'job.json').write_text(json.dumps(dict(entry=info['entry_point'], application=name,
                                                     cases=CASES, mapped=mapped)))
         shutil.copyfile(Path(__file__).resolve().parents[1]/'native/glorb_pcm.py', tmp/'probe.py')
         options = [qemu, '-M', 'esp32s3', '-nic', 'none', '-display', 'none', '-serial', 'none', '-monitor', 'none',
