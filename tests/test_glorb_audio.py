@@ -1,12 +1,22 @@
 import hashlib
+from pathlib import Path
 import struct
+import tempfile
 import unittest
 
-from vfl.devices.glorb_audio import compare_to_factory, flash_image
+from tests.test_firmware import esp_image
+from vfl.devices.glorb_audio import compare_to_factory, flash_image, measure
 from vfl.model import LabError
 
 
 class GlorbAudioTests(unittest.TestCase):
+    def test_unknown_esp32s3_application_is_rejected_before_launch(self):
+        with tempfile.TemporaryDirectory() as base:
+            image = Path(base) / 'unknown.bin'
+            image.write_bytes(esp_image(chip_id=9))
+            with self.assertRaisesRegex(LabError, 'unsupported GLORB application SHA256'):
+                measure(image, b'', 'unused-qemu', 'unused-gdb', base, 1)
+
     def test_single_factory_partition_without_saved_device_settings(self):
         flash = flash_image(b'boot', b'app')
         self.assertEqual(len(flash), 8 * 1024 * 1024)
